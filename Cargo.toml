@@ -1,0 +1,8 @@
+[package]
+
+name = "rim"
+version = "0.0.1"
+authors = [ "Mathias Hällman <rim@mths.se>" ]
+
+[[bin]]
+name = "rim"
