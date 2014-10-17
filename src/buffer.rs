@@ -10,11 +10,15 @@ use std::cmp;
 use std::io::{File, IoError, IoResult};
 use std::mem;
 use std::num;
+use std::ptr;
 
 #[cfg(not(test))]
 static PAGE_SIZE: uint = 1024;  // ish
 #[cfg(test)]
 static PAGE_SIZE: uint = 16;
+
+// a rather soft limit where it's good time to split a page in two
+static MAX_PAGE_SIZE: uint = (PAGE_SIZE as f32 * 1.5) as uint;
 
 /*
  * File contents when stored in memory is paginated for quick modification.
@@ -84,6 +88,55 @@ impl PageTree {
     let mut tree = PageTree::new();
     for page in stream { tree.append_page(page); }
     return stream.error.map_or(Ok(tree), |err| Err(err));
+  }
+
+  fn insert_string_at_offset(&mut self, string: String, offset: uint) {
+    // We may only split a page once, otherwise rebalancing may not be possible
+    // while returning. Therefore we must avoid inserting too large strings.
+    assert!(string.len() <= PAGE_SIZE)
+    assert!(offset <= self.length)
+    {
+      let (go_left, new_offset) = self.decide_branch_by_offset(offset);
+      let (branch, other) = if go_left { (&mut self.left, &mut self.right) }
+                            else       { (&mut self.right, &mut self.left) };
+
+      let new_branch = match mem::replace(branch, Nil) {
+        Nil            => Leaf(Page::new(string)),
+        Tree(mut tree) => {
+          tree.insert_string_at_offset(string, new_offset);
+          Tree(tree)
+        },
+        Leaf(mut page) => {
+          page.insert_string_at_offset(string, new_offset);
+          // split the page if it got too big
+          if page.data.as_bytes().len() > MAX_PAGE_SIZE {
+            let (page, next_page) = page.split();
+            assert!(page.data.len() <= MAX_PAGE_SIZE)
+            assert!(next_page.data.len() <= MAX_PAGE_SIZE)
+            // avoid splitting the leaf if there's place in the other branch
+            if other.is_nil() {
+              let (page, other_page) =
+                if go_left { (page, next_page) } else { (next_page, page) };
+              *other = Leaf(other_page);
+              Leaf(page)
+            }
+            else {
+              let mut new_subtree = PageTree::new();
+              let right_offset = page.length;
+              new_subtree.insert_page_at_offset(page, 0);
+              new_subtree.insert_page_at_offset(next_page, right_offset);
+              Tree(box new_subtree)
+            }
+          }
+          else {
+            Leaf(page)
+          }
+        }
+      };
+      mem::replace(branch, new_branch);
+    }
+    self.update_caches();
+    self.ensure_balanced();
   }
 
   fn prepend_page(&mut self, page: Page) {
@@ -272,12 +325,88 @@ struct Page {
 
 impl Page {
   fn new(data: String) -> Page {
-    let length = data.as_slice().len();
-    let newlines = match data.as_slice().lines().count() {
+    assert!(data.len() <= MAX_PAGE_SIZE)
+    let mut page = Page { data: data, length: 0, newlines: 0 };
+    page.update_caches();
+    return page;
+  }
+
+  fn insert_string_at_offset(&mut self, string: String, offset: uint) {
+    assert!(offset <= self.data.as_slice().char_len())
+    let byte_offset = self.data.as_slice().slice_chars(0, offset).len() as int;
+    let original_size = self.data.len();
+    let string_size = string.len();
+    self.data.push_str(string.as_slice());  // first grow organically
+    unsafe {
+      let bytes_mut = self.data.as_mut_vec().as_mut_ptr();
+      // make place by shifting some original data to the side
+      ptr::copy_memory(bytes_mut.offset(byte_offset + string_size as int),
+                       self.data.as_bytes().as_ptr().offset(byte_offset),
+                       original_size - byte_offset as uint);
+      // plunk that chunk in there
+      ptr::copy_memory(bytes_mut.offset(byte_offset),
+                       string.as_bytes().as_ptr(),
+                       string_size);
+    }
+    self.update_caches();
+  }
+
+  fn update_caches(&mut self) {
+    self.length = self.data.as_slice().char_len();
+    self.newlines = match self.data.as_slice().lines().count() {
       0 => 0,
       line_count => line_count - 1,
     };
-    Page { data: data, length: length, newlines: newlines }
+  }
+
+  fn split(mut self) -> (Page, Page) {
+    let half_plus_buffer_zone = self.data.len() / 2 + 2;
+    let mut chunker = StringChunkerator::new(self.data, half_plus_buffer_zone);
+    self.data = chunker.next().expect("Split should have got a first chunk.");
+    let rest = chunker.next().expect("Split should have got a second chunk.");
+    assert!(chunker.next().is_none())
+    self.update_caches();
+    return (self, Page::new(rest));
+  }
+}
+
+/*
+ * The StringChunkerator eats strings and leaves chunks no larger than the
+ * specified size.
+ */
+struct StringChunkerator {
+  data: Vec<u8>,
+  chunk_size: uint,
+}
+
+impl StringChunkerator {
+  fn new(string: String, chunk_size: uint) -> StringChunkerator {
+    StringChunkerator { data: string.into_bytes(), chunk_size: chunk_size }
+  }
+}
+
+impl Iterator<String> for StringChunkerator {
+  fn next(&mut self) -> Option<String> {
+    // cut out a chunk of |self.chunk_size| bytes and hope it's a valid string
+    let mut chunk: Vec<u8> =
+      self.data.iter().take(self.chunk_size).map(|&b| b).collect();
+    self.data = self.data.iter().skip(self.chunk_size).map(|&b| b).collect();
+    while self.data.len() > 0 || chunk.len() > 0 {
+      chunk = match String::from_utf8(chunk) {
+        Err(mut broken_chunk) => {
+          // shift a byte back to data before trying again
+          match broken_chunk.pop() {
+            None    => unreachable!(),
+            Some(byte) => self.data.insert(0, byte),
+          }
+          broken_chunk
+        }
+        Ok(good_chunk) => {
+          return Some(good_chunk.into_string());
+        }
+      }
+    }
+    return None;
   }
 }
 
@@ -342,6 +471,12 @@ pub struct Buffer {
 }
 
 impl Buffer {
+  pub fn new() -> Buffer {
+    let mut buffer = Buffer { path: None, tree: PageTree::new() };
+    buffer.insert_at_offset(String::from_str("\n"), 0);
+    return buffer;
+  }
+
   pub fn open(path: &Path) -> IoResult<Buffer> {
     PageStream::new(path).and_then(PageTree::build).and_then(
       |tree| Ok(Buffer { path: Some(path.clone()), tree: tree }))
@@ -363,43 +498,76 @@ impl Buffer {
     use std::io::OtherIoError;
     IoError { kind: OtherIoError, desc: "no path specified", detail: None }
   }
+
+  pub fn insert_at_offset(&mut self, string: String, mut offset: uint) {
+    if string.len() > PAGE_SIZE {
+      for chunk in StringChunkerator::new(string, PAGE_SIZE) {
+        let chunk_length = chunk.as_slice().char_len();
+        self.tree.insert_string_at_offset(chunk, offset);
+        offset += chunk_length;
+      }
+    }
+    else {
+      self.tree.insert_string_at_offset(string, offset);
+    }
+  }
 }
 
 mod testing {
   use std::io::{File, IoResult};
   use std::num;
 
-  macro_rules! load_and_dump_test(
-    ($fun:ident) => (
+  // Opens a buffer (new or loaded file), performs some operation on it,
+  // dumps buffer content to disk, compares results to expectations.
+  // Also throws in a balance check on the resulting page tree, because why not.
+  fn buffer_test(test: &String, operation: |&mut super::Buffer| -> (),
+                 make_buffer: || -> IoResult<super::Buffer>) {
+    let result_path = Path::new(format!("tests/buffer/{}-result.txt", test));
+    let expect_path = Path::new(format!("tests/buffer/{}-expect.txt", test));
+
+    let result = make_buffer().
+      map(|mut buffer| { operation(&mut buffer); buffer }).
+      map(|buffer| { assert!(is_balanced(&buffer.tree)); buffer }).
+      and_then(|buffer| buffer.write_to(&result_path));
+
+    let file_contents = |path| File::open(path).and_then(
+      |mut file| file.read_to_string());
+
+    let result_content = file_contents(&result_path);
+    let expect_content = file_contents(&expect_path);
+
+    match (result_content, result, expect_content) {
+      (Err(err),   _,        _         ) => fail!(err.desc),
+      (_,          Err(err), _         ) => fail!(err.desc),
+      (_,          _,        Err(err)  ) => fail!(err.desc),
+      (Ok(result), Ok(_),    Ok(expect)) => assert!(result == expect),
+    };
+  }
+
+  #[test]
+  fn write_without_path() {
+    assert!(super::Buffer::new().write().is_err());
+  }
+
+  macro_rules! buffer_test(
+    ($name:ident, $new_file:expr, $operation:expr) => (
       #[test]
-      fn $fun() {
-        load_and_dump(&Path::new(
-          format!("tests/buffer/{}.txt", stringify!($fun))));
+      fn $name() {
+        let test = String::from_str(stringify!($name));
+        let buffer_maker = if $new_file { || Ok(super::Buffer::new()) }
+          else { || {
+            let test_path = Path::new(format!("tests/buffer/{}.txt", &test));
+            return super::Buffer::open(&test_path);
+          }};
+        buffer_test(&test, $operation, buffer_maker);
       }
     );
   )
 
-  load_and_dump_test!(utf8_one_byte_overflow)
-  load_and_dump_test!(utf8_two_byte_overflow)
-  load_and_dump_test!(one_full_page)
-  load_and_dump_test!(multiple_pages)
-
-  fn load_and_dump(test: &Path) {
-    let content_before = file_contents(test);
-    let result = super::Buffer::open(test).and_then(|buf| buf.write());
-    let content_after = file_contents(test);
-
-    match (content_before, result, content_after) {
-      (Err(err),   _,        _        ) => fail!(err.desc),
-      (_,          Err(err), _        ) => fail!(err.desc),
-      (_,          _,        Err(err) ) => fail!(err.desc),
-      (Ok(before), Ok(_),    Ok(after)) => assert!(before == after),
-    };
-  }
-
-  fn file_contents(test: &Path) -> IoResult<String> {
-    File::open(test).and_then(|mut file| file.read_to_string())
-  }
+  buffer_test!(utf8_one_byte_overflow, false, |_| ())
+  buffer_test!(utf8_two_byte_overflow, false, |_| ())
+  buffer_test!(one_full_page, false, |_| ())
+  buffer_test!(multiple_pages, false, |_| ())
 
   macro_rules! simple_balance_test(
     ($name:ident, $fun:ident, $num_pages:expr) => (
@@ -455,5 +623,36 @@ mod testing {
     let right_height = tree.right.height() as int;
     return num::abs(left_height - right_height) < 2 &&
       branch_is_balanced(&tree.left) && branch_is_balanced(&tree.right);
+  }
+
+  buffer_test!(existing_file_insert, false, existing_file_insert_operation)
+  buffer_test!(new_file_insert, true, new_file_insert_operation)
+  buffer_test!(page_split_utf8_insert, false, page_split_utf8_insert_operation)
+  buffer_test!(long_string_insert, true, long_string_insert_operation)
+
+  fn existing_file_insert_operation(buffer: &mut super::Buffer) {
+    buffer.insert_at_offset(String::from_str("more"), 0);
+    buffer.insert_at_offset(String::from_str(" than "), 4);
+    buffer.insert_at_offset(String::from_str("."), 25);
+    let buffer_end = buffer.tree.length - 1;
+    buffer.insert_at_offset(String::from_str(" and then some"), buffer_end);
+  }
+
+  fn new_file_insert_operation(buffer: &mut super::Buffer) {
+    buffer.insert_at_offset(String::from_str("Here's a second line"), 1);
+    buffer.insert_at_offset(String::from_str(" with a newline\n"), 21);
+    buffer.insert_at_offset(String::from_str("First line go here"), 0);
+    buffer.insert_at_offset(String::from_str(", and it even has a dot."), 18);
+  }
+
+  fn page_split_utf8_insert_operation(buffer: &mut super::Buffer) {
+    buffer.insert_at_offset(String::from_str("boop"), 5);
+    buffer.insert_at_offset(String::from_str("boop"), 22);
+    buffer.insert_at_offset(String::from_str("boop"), 36);
+  }
+
+  fn long_string_insert_operation(buffer: &mut super::Buffer) {
+    buffer.insert_at_offset(String::from_str(
+      include_str!("../tests/buffer/long_string_insert.txt")), 1);
   }
 }

@@ -1,0 +1,3 @@
+This file contain 1-, 2-, and 3-byte utf8 encoded characters, and it's all going to be inserted in a buffer as one "insert string" operation.
+Vim（ヴィムまたはヴィアイエム）は、vi から派生し、発展した高機能なテキストエディタである。
+Vim (произнасяно „Вим“) е един от най-мощните и стари текстови редактори, достъпен безплатно за почти всяка операционна система (включително и Windows).

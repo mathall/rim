@@ -1,0 +1,1 @@
+Here's some ひらがな and 漢字 and also åäö but that's mostly irrelevant because here we're just trying to load and dump multiple pages.  // Well that's what I thought first at least. Turned out that the multi-byte code points once caused errors in later pages.
