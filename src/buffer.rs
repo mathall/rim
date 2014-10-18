@@ -511,7 +511,8 @@ impl Buffer {
   }
 }
 
-mod testing {
+#[cfg(test)]
+mod test {
   use std::io::{File, IoResult};
   use std::num;
 
