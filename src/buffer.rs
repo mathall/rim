@@ -13,12 +13,12 @@ use std::num;
 use std::ptr;
 
 #[cfg(not(test))]
-static PAGE_SIZE: uint = 1024;  // ish
+const PAGE_SIZE: uint = 1024;  // ish
 #[cfg(test)]
-static PAGE_SIZE: uint = 16;
+const PAGE_SIZE: uint = 16;
 
 // a rather soft limit where it's good time to split a page in two
-static MAX_PAGE_SIZE: uint = (PAGE_SIZE as f32 * 1.5) as uint;
+const MAX_PAGE_SIZE: uint = (PAGE_SIZE as f32 * 1.5) as uint;
 
 /*
  * File contents when stored in memory is paginated for quick modification.
