@@ -211,14 +211,14 @@ impl PageTree {
       // go down the higher branch and stash the affected trees
       let first_go_left = left_height > right_height;
       match if first_go_left { &mut self.left } else { &mut self.right } {
-        &Nil | &Leaf(_)    => assert!(false),
+        &Nil | &Leaf(_)    => unreachable!(),
         &Tree(ref mut mid) => {
           let left_height = mid.left.height();
           let right_height = mid.right.height();
           assert!(left_height != right_height);
           let then_go_left = left_height > right_height;
           match if then_go_left { &mut mid.left } else { &mut mid.right } {
-            &Nil | &Leaf(_)    => assert!(false),
+            &Nil | &Leaf(_)    => unreachable!(),
             &Tree(ref mut low) => {
               // stash the branches of the lower subtree in appropriate order
               let (left, right) = match (first_go_left, then_go_left) {
@@ -446,11 +446,9 @@ impl Iterator<Page> for PageStream {
     let mut data = box [0, ..PAGE_SIZE];
     let result = self.file.read(*data).
       map(|bytes| PageStream::raw_data_to_utf8_string((*data)[0..bytes])).
-      and_then(|(string, num_truncated_bytes)|
-        match self.file.seek(-(num_truncated_bytes as i64), SeekCur) {
-          Err(err) => Err(err),
-          Ok(())   => Ok(Page::new(string)),
-        });
+      and_then(|(string, num_truncated_bytes)| {
+        try!(self.file.seek(-(num_truncated_bytes as i64), SeekCur))
+        Ok(Page::new(string)) });
 
     match result {
       Ok(page) => return Some(page),
@@ -540,7 +538,7 @@ mod testing {
       (Err(err),   _,        _         ) => fail!(err.desc),
       (_,          Err(err), _         ) => fail!(err.desc),
       (_,          _,        Err(err)  ) => fail!(err.desc),
-      (Ok(result), Ok(_),    Ok(expect)) => assert!(result == expect),
+      (Ok(result), Ok(_),    Ok(expect)) => assert_eq!(result, expect),
     };
   }
 
