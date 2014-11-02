@@ -536,9 +536,9 @@ mod test {
     let expect_content = file_contents(&expect_path);
 
     match (result_content, result, expect_content) {
-      (Err(err),   _,        _         ) => fail!(err.desc),
-      (_,          Err(err), _         ) => fail!(err.desc),
-      (_,          _,        Err(err)  ) => fail!(err.desc),
+      (Err(err),   _,        _         ) => panic!(err.desc),
+      (_,          Err(err), _         ) => panic!(err.desc),
+      (_,          _,        Err(err)  ) => panic!(err.desc),
       (Ok(result), Ok(_),    Ok(expect)) => assert_eq!(result, expect),
     };
   }
