@@ -6,3 +6,6 @@ authors = [ "Mathias Hällman <rim@mths.se>" ]
 
 [[bin]]
 name = "rim"
+
+[dependencies.termkey]
+git = "git://github.com/o11c/termkey-rs"

@@ -6,10 +6,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#![feature(slicing_syntax)]
 #![feature(macro_rules)]
+#![feature(slicing_syntax)]
+#![feature(struct_variant)]
 
 mod buffer;
+mod input;
+mod keymap;
 
 #[cfg(not(test))]
 fn main() {

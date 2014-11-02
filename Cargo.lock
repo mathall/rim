@@ -1,4 +1,12 @@
 [root]
 name = "rim"
 version = "0.0.1"
+dependencies = [
+ "termkey 0.17.5 (git+git://github.com/o11c/termkey-rs)",
+]
+
+[[package]]
+name = "termkey"
+version = "0.17.5"
+source = "git+git://github.com/o11c/termkey-rs#673814e721f9d31e5c2a60960dc19b82e5d15cee"
 
