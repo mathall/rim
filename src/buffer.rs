@@ -58,7 +58,7 @@ impl PageTreeNode {
     match *self {
       Nil            => 0,
       Tree(ref tree) => tree.newlines,
-      Leaf(ref page) => page.newlines,
+      Leaf(ref page) => page.newline_offsets.len(),
     }
   }
 
@@ -88,6 +88,52 @@ impl PageTree {
     let mut tree = PageTree::new();
     for page in stream { tree.append_page(page); }
     return stream.error.map_or(Ok(tree), |err| Err(err));
+  }
+
+  // See comment for offset_of_line_start and add to that quirk the requirement
+  // that |column| == 0.
+  fn line_column_to_offset(&self, line: uint, column: uint) -> Option<uint> {
+    self.offset_of_line_start(line).and_then(
+      |line_start_offset| {
+        let line_end_offset =
+          self.offset_of_line_start(line + 1).unwrap_or(self.length);
+        assert!(line_end_offset >= line_start_offset);
+        let line_length = line_end_offset - line_start_offset;
+        let offset = line_start_offset + column;
+        if column == 0 || column < line_length { Some(offset) } else { None }
+      })
+  }
+
+  // May return an offset one position past the end of the file if either:
+  //  * L == 0 and the file is empty, or
+  //  * L == N+1 and line N ended with a newline
+  // where L is the zero-indexed line number being sought for and N is the
+  // number of newlines in the file.
+  fn offset_of_line_start(&self, line: uint) -> Option<uint> {
+    let (go_left, new_line) = self.decide_branch_by_line(line);
+    let (branch, other) = if go_left { (&self.left, &self.right) }
+                          else       { (&self.right, &self.left) };
+    match branch {
+      &Nil            => if new_line == 0 { Some(0) } else { None },
+      &Tree(ref tree) => tree.offset_of_line_start(new_line),
+      &Leaf(ref page) =>
+        if new_line == 0 { Some(0) }
+        else { page.offset_of_newline(new_line - 1).map(|offset| offset + 1) }
+    }.map(|offset| offset + if go_left { 0 } else { other.length() })
+  }
+
+  fn get_char_by_line_column(&self, line: uint, column: uint) -> Option<char> {
+    self.line_column_to_offset(line, column).and_then(
+      |offset| self.get_char_by_offset(offset))
+  }
+
+  fn get_char_by_offset(&self, offset: uint) -> Option<char> {
+    let (go_left, new_offset) = self.decide_branch_by_offset(offset);
+    match if go_left { &self.left } else { &self.right } {
+      &Nil            => None,
+      &Tree(ref tree) => tree.get_char_by_offset(new_offset),
+      &Leaf(ref page) => page.data.as_slice().chars().nth(new_offset),
+    }
   }
 
   fn insert_string_at_offset(&mut self, string: String, offset: uint) {
@@ -286,6 +332,12 @@ impl PageTree {
     return (go_left, if go_left { offset } else { offset - left_length });
   }
 
+  fn decide_branch_by_line(&self, line: uint) -> (bool, uint) {
+    let left_newlines = self.left.newlines();
+    let go_left = line <= left_newlines;
+    return (go_left, if go_left { line } else { line - left_newlines });
+  }
+
   fn iter(&self) -> PageTreeIterator {
     PageTreeIterator::new(self)
   }
@@ -320,13 +372,13 @@ impl<'l> Iterator<&'l Page> for PageTreeIterator<'l> {
 struct Page {
   data: String,
   length: uint,
-  newlines: uint,
+  newline_offsets: Vec<uint>,  // cached offsets to newlines within the page
 }
 
 impl Page {
   fn new(data: String) -> Page {
     assert!(data.len() <= MAX_PAGE_SIZE)
-    let mut page = Page { data: data, length: 0, newlines: 0 };
+    let mut page = Page { data: data, length: 0, newline_offsets: Vec::new() };
     page.update_caches();
     return page;
   }
@@ -353,10 +405,16 @@ impl Page {
 
   fn update_caches(&mut self) {
     self.length = self.data.as_slice().char_len();
-    self.newlines = match self.data.as_slice().lines().count() {
-      0 => 0,
-      line_count => line_count - 1,
-    };
+    self.newline_offsets.clear();
+    let mut offset = 0;
+    for character in self.data.as_slice().chars() {
+      if character == '\n' { self.newline_offsets.push(offset); }
+      offset += 1;
+    }
+  }
+
+  fn offset_of_newline(&self, newline: uint) -> Option<uint> {
+    self.newline_offsets.get(newline).map(|&offset| offset)
   }
 
   fn split(mut self) -> (Page, Page) {
@@ -509,6 +567,11 @@ impl Buffer {
       self.tree.insert_string_at_offset(string, offset);
     }
   }
+
+  pub fn get_char_by_line_column(&self, line: uint, column: uint) ->
+      Option<char> {
+    self.tree.get_char_by_line_column(line, column)
+  }
 }
 
 #[cfg(test)]
@@ -653,5 +716,42 @@ mod test {
   fn long_string_insert_operation(buffer: &mut super::Buffer) {
     buffer.insert_at_offset(String::from_str(
       include_str!("../tests/buffer/long_string_insert.txt")), 1);
+  }
+
+  #[test]
+  fn line_column_to_offset_test() {
+    let tests = [
+       ((0u, 0u), Some(0u)), ((0u, 15u), Some(15u)), ((0u, 16u), None),
+       ((1u, 15u), Some(31u)), ((1u, 28u), Some(44u)),
+       ((5u, 0u), Some(51u)), ((5u, 1u), None),
+       ((7u, 0u), Some(53u)),
+       ((8u, 0u), Some(62u)), ((8u, 1u), None),
+       ((9u, 0u), None), ((9u, 1u), None)
+    ];
+
+    let test_path = Path::new("tests/buffer/line_column_offset.txt");
+    let buffer = super::Buffer::open(&test_path).unwrap();
+    for &((line, column), expected_offset) in tests.iter() {
+      assert_eq!(buffer.tree.line_column_to_offset(line, column),
+                 expected_offset);
+    }
+  }
+
+  #[test]
+  fn get_char_by_line_column_test() {
+    let tests = [
+      ((0u, 0u), Some('a')), ((0u, 15u), Some('\n')), ((0u, 16u), None),
+      ((1u, 15u), Some('p')), ((1u, 28u), Some('ö')),
+      ((5u, 0u), Some('\n')), ((5u, 1u), None),
+      ((7u, 0u), Some('2')),
+      ((8u, 0u), None), ((8u, 1u), None),
+      ((9u, 0u), None), ((9u, 1u), None)
+    ];
+
+    let test_path = Path::new("tests/buffer/line_column_offset.txt");
+    let buffer = super::Buffer::open(&test_path).unwrap();
+    for &((line, column), expect_char) in tests.iter() {
+      assert_eq!(buffer.get_char_by_line_column(line, column), expect_char);
+    }
   }
 }
