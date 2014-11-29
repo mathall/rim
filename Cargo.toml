@@ -8,4 +8,4 @@ authors = [ "Mathias Hällman <rim@mths.se>" ]
 name = "rim"
 
 [dependencies.termkey]
-git = "git://github.com/o11c/termkey-rs"
+git = "git://github.com/mathall/termkey-rs.git"
