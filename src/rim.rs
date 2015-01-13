@@ -1,14 +1,15 @@
 /*
- * Copyright (c) 2014 Mathias Hällman
+ * Copyright (c) 2014-2015 Mathias Hällman
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#![feature(macro_rules)]
+#![allow(unstable)]
+
+#![feature(int_uint)]
 #![feature(slicing_syntax)]
-#![feature(struct_variant)]
 
 #[allow(dead_code, unused_imports)]  // temporary until buffer is used for real
 mod buffer;
@@ -21,7 +22,7 @@ mod screen;
 fn main() {
   let mut screen = screen::Screen::setup().unwrap();
 
-  let (key_tx, key_rx) = std::comm::channel();
+  let (key_tx, key_rx) = std::sync::mpsc::channel();
   let _term_input = input::start(key_tx);
 
   let buffer = buffer::Buffer::open(&Path::new("src/rim.rs")).unwrap();
@@ -29,9 +30,9 @@ fn main() {
   // just keep the buffer on the screen until ctrl+c is pressed
   loop {
     match key_rx.try_recv() {
-      Ok(keymap::Unicode{codepoint: 'c', mods}) =>
+      Ok(keymap::Key::Unicode{codepoint: 'c', mods}) =>
         if mods.contains(keymap::MOD_CTRL) { break },
-      _                                         => (),
+      _                                              => (),
     }
 
     if screen.update_size() {
@@ -45,10 +46,10 @@ fn main() {
           buffer.get_char_by_line_column(line as uint, column as uint).
           map(|character| if character == '\n' { ' ' } else { character }).
           unwrap_or(if column == 0 { '~' } else { ' ' });
-        let fg = screen::color::Black;
-        let bg = screen::color::White;
+        let fg = screen::Color::Black;
+        let bg = screen::Color::White;
         screen.put(cell, character, fg, bg);
-        skip_cols = std::char::width(character, false).unwrap_or(1) - 1;
+        skip_cols = CharExt::width(character, false).unwrap_or(1) - 1;
       }
       screen.flush();
     }

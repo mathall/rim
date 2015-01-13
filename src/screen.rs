@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Mathias Hällman
+ * Copyright (c) 2014-2015 Mathias Hällman
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,8 +9,9 @@
 extern crate term;
 
 use std::cmp;
+use std::ops::{Add, Sub};
 
-#[deriving(PartialEq)]
+#[derive(Copy, PartialEq)]
 pub struct Size(pub u16, pub u16);
 
 impl Size {
@@ -19,6 +20,7 @@ impl Size {
   }
 }
 
+#[derive(Copy)]
 pub struct Cell(pub u16, pub u16);
 
 impl Cell {
@@ -33,18 +35,20 @@ impl Cell {
   }
 }
 
-impl Add<Cell, Cell> for Cell {
-  fn add(&self, rhs: &Cell) -> Cell {
-    let Cell(r1, c1) = *self;
-    let Cell(r2, c2) = *rhs;
+impl Add for Cell {
+  type Output = Cell;
+  fn add(self, rhs: Cell) -> Cell {
+    let Cell(r1, c1) = self;
+    let Cell(r2, c2) = rhs;
     Cell(r1 + r2, c1 + c2)
   }
 }
 
-impl Sub<Cell, Cell> for Cell {
-  fn sub(&self, rhs: &Cell) -> Cell {
-    let Cell(r1, c1) = *self;
-    let Cell(r2, c2) = *rhs;
+impl Sub for Cell {
+  type Output = Cell;
+  fn sub(self, rhs: Cell) -> Cell {
+    let Cell(r1, c1) = self;
+    let Cell(r2, c2) = rhs;
     Cell(cmp::max(r1 as i16 - r2 as i16, 0) as u16,
          cmp::max(c1 as i16 - c2 as i16, 0) as u16)
   }
@@ -69,7 +73,9 @@ impl CellIterator {
   }
 }
 
-impl Iterator<Cell> for CellIterator {
+impl Iterator for CellIterator {
+  type Item = Cell;
+
   fn next(&mut self) -> Option<Cell> {
     let ret = self.next_cell;
     self.next_cell = self.next_cell.and_then(|cell|
@@ -127,8 +133,7 @@ impl Screen {
     self.terminal.clear();
   }
 
-  pub fn put(&mut self, position: Cell, character: char,
-             fg: color::Color, bg: color::Color) {
+  pub fn put(&mut self, position: Cell, character: char, fg: Color, bg: Color) {
     position.within(self.size).map(|Cell(row, col)| {
       self.terminal.set_cursor_position(row, col);
       self.terminal.set_fg(fg);
@@ -155,11 +160,11 @@ impl Terminal {
     term::stdout().map(|terminal| Terminal { terminal: terminal })
   }
 
-  pub fn set_fg(&mut self, fg: color::Color) {
+  pub fn set_fg(&mut self, fg: Color) {
     self.terminal.fg(fg.to_term_color()).unwrap();
   }
 
-  pub fn set_bg(&mut self, bg: color::Color) {
+  pub fn set_bg(&mut self, bg: Color) {
     self.terminal.bg(bg.to_term_color()).unwrap();
   }
 
@@ -201,48 +206,46 @@ impl Terminal {
  * Color values for terminal output.
  */
 #[allow(dead_code)]  // colors are not used much yet
-pub mod color {
-  extern crate term;
+#[derive(Copy)]
+pub enum Color {
+  Black,
+  Red,
+  Green,
+  Yellow,
+  Blue,
+  Magenta,
+  Cyan,
+  White,
+  BrightBlack,
+  BrightRed,
+  BrightGreen,
+  BrightYellow,
+  BrightBlue,
+  BrightMagenta,
+  BrightCyan,
+  BrightWhite,
+}
 
-  pub enum Color {
-    Black,
-    Red,
-    Green,
-    Yellow,
-    Blue,
-    Magenta,
-    Cyan,
-    White,
-    BrightBlack,
-    BrightRed,
-    BrightGreen,
-    BrightYellow,
-    BrightBlue,
-    BrightMagenta,
-    BrightCyan,
-    BrightWhite,
-  }
-
-  impl Color {
-    pub fn to_term_color(&self) -> term::color::Color {
-      match *self {
-        Black         => term::color::BLACK,
-        Red           => term::color::RED,
-        Green         => term::color::GREEN,
-        Yellow        => term::color::YELLOW,
-        Blue          => term::color::BLUE,
-        Magenta       => term::color::MAGENTA,
-        Cyan          => term::color::CYAN,
-        White         => term::color::WHITE,
-        BrightBlack   => term::color::BRIGHT_BLACK,
-        BrightRed     => term::color::BRIGHT_RED,
-        BrightGreen   => term::color::BRIGHT_GREEN,
-        BrightYellow  => term::color::BRIGHT_YELLOW,
-        BrightBlue    => term::color::BRIGHT_BLUE,
-        BrightMagenta => term::color::BRIGHT_MAGENTA,
-        BrightCyan    => term::color::BRIGHT_CYAN,
-        BrightWhite   => term::color::BRIGHT_WHITE,
-      }
+#[allow(dead_code)]  // colors are not used much yet
+impl Color {
+  pub fn to_term_color(&self) -> term::color::Color {
+    match *self {
+      Color::Black         => term::color::BLACK,
+      Color::Red           => term::color::RED,
+      Color::Green         => term::color::GREEN,
+      Color::Yellow        => term::color::YELLOW,
+      Color::Blue          => term::color::BLUE,
+      Color::Magenta       => term::color::MAGENTA,
+      Color::Cyan          => term::color::CYAN,
+      Color::White         => term::color::WHITE,
+      Color::BrightBlack   => term::color::BRIGHT_BLACK,
+      Color::BrightRed     => term::color::BRIGHT_RED,
+      Color::BrightGreen   => term::color::BRIGHT_GREEN,
+      Color::BrightYellow  => term::color::BRIGHT_YELLOW,
+      Color::BrightBlue    => term::color::BRIGHT_BLUE,
+      Color::BrightMagenta => term::color::BRIGHT_MAGENTA,
+      Color::BrightCyan    => term::color::BRIGHT_CYAN,
+      Color::BrightWhite   => term::color::BRIGHT_WHITE,
     }
   }
 }

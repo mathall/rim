@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Mathias Hällman
+ * Copyright (c) 2014-2015 Mathias Hällman
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -13,94 +13,94 @@
  *   - Unicode codepoint such as a, ä, or あ
  * The key also records key modifier information.
  */
-#[deriving(Clone, PartialEq, Show)]
+#[derive(Clone, PartialEq, Show)]
 pub enum Key {
-  Fn{pub num: int, pub mods: KeyMod},
-  Sym{pub sym: KeySym, pub mods: KeyMod},
-  Unicode{pub codepoint: char, pub mods: KeyMod},
+  Fn{num: int, mods: KeyMod},
+  Sym{sym: KeySym, mods: KeyMod},
+  Unicode{codepoint: char, mods: KeyMod},
 }
 
-#[deriving(Clone, PartialEq, Show)]
+#[derive(Clone, PartialEq, Show)]
 pub enum KeySym
 {
-  SymUnknown = -1,
-  SymNone = 0,
+  Unknown = -1,
+  None = 0,
 
   /* Special names in C0 */
-  SymBackspace,
-  SymTab,
-  SymEnter,
-  SymEscape,
+  Backspace,
+  Tab,
+  Enter,
+  Escape,
 
   /* Special names in G0 */
-  SymSpace,
-  SymDel,
+  Space,
+  Del,
 
   /* Special keys */
-  SymUp,
-  SymDown,
-  SymLeft,
-  SymRight,
-  SymBegin,
-  SymFind,
-  SymInsert,
-  SymDelete,
-  SymSelect,
-  SymPageup,
-  SymPagedown,
-  SymHome,
-  SymEnd,
+  Up,
+  Down,
+  Left,
+  Right,
+  Begin,
+  Find,
+  Insert,
+  Delete,
+  Select,
+  Pageup,
+  Pagedown,
+  Home,
+  End,
 
   /* Special keys from terminfo */
-  SymCancel,
-  SymClear,
-  SymClose,
-  SymCommand,
-  SymCopy,
-  SymExit,
-  SymHelp,
-  SymMark,
-  SymMessage,
-  SymMove,
-  SymOpen,
-  SymOptions,
-  SymPrint,
-  SymRedo,
-  SymReference,
-  SymRefresh,
-  SymReplace,
-  SymRestart,
-  SymResume,
-  SymSave,
-  SymSuspend,
-  SymUndo,
+  Cancel,
+  Clear,
+  Close,
+  Command,
+  Copy,
+  Exit,
+  Help,
+  Mark,
+  Message,
+  Move,
+  Open,
+  Options,
+  Print,
+  Redo,
+  Reference,
+  Refresh,
+  Replace,
+  Restart,
+  Resume,
+  Save,
+  Suspend,
+  Undo,
 
   /* Numeric keypad special keys */
-  SymKP0,
-  SymKP1,
-  SymKP2,
-  SymKP3,
-  SymKP4,
-  SymKP5,
-  SymKP6,
-  SymKP7,
-  SymKP8,
-  SymKP9,
-  SymKPEnter,
-  SymKPPlus,
-  SymKPMinus,
-  SymKPMult,
-  SymKPDiv,
-  SymKPComma,
-  SymKPPeriod,
-  SymKPEquals,
+  KP0,
+  KP1,
+  KP2,
+  KP3,
+  KP4,
+  KP5,
+  KP6,
+  KP7,
+  KP8,
+  KP9,
+  KPEnter,
+  KPPlus,
+  KPMinus,
+  KPMult,
+  KPDiv,
+  KPComma,
+  KPPeriod,
+  KPEquals,
 
   /* et cetera ad nauseum */
-  SymNSyms,
+  NSyms,
 }
 
 bitflags! {
-  #[deriving(Show)]
+  #[derive(Show)]
   flags KeyMod: u8 {
     const MOD_NONE  = 0,
     const MOD_SHIFT = 1 << 0,

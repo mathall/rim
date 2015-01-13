@@ -9,3 +9,6 @@ name = "rim"
 
 [dependencies.termkey]
 git = "git://github.com/mathall/termkey-rs.git"
+
+[dependencies]
+time = "*"

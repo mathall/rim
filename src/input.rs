@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014 Mathias Hällman
+ * Copyright (c) 2014-2015 Mathias Hällman
  *
  * This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
@@ -9,7 +9,11 @@
 extern crate libc;
 extern crate termkey;
 
-use std::comm;
+use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
+use std::thread::Thread;
+
+use self::termkey::{TermKeyEvent, TermKeyResult};
+use self::termkey::c::TermKeySym;
 
 use keymap;
 
@@ -28,8 +32,8 @@ pub struct TermInput {
 
 impl Drop for TermInput {
   fn drop(&mut self) {
-    self.kill_tx.send(());
-    self.died_rx.recv();
+    self.kill_tx.send(()).unwrap();
+    self.died_rx.recv().unwrap();
   }
 }
 
@@ -41,9 +45,9 @@ pub fn start(key_tx: Sender<keymap::Key>) -> TermInput {
 
 // start listening for terminal input on the specified file descriptor
 pub fn start_on_fd(fd: libc::c_int, key_tx: Sender<keymap::Key>) -> TermInput {
-  let (kill_tx, kill_rx) = comm::channel();
-  let (died_tx, died_rx) = comm::channel();
-  spawn(proc() { input_loop(kill_rx, died_tx, key_tx, fd); });
+  let (kill_tx, kill_rx) = channel();
+  let (died_tx, died_rx) = channel();
+  Thread::spawn(move |:| { input_loop(kill_rx, died_tx, key_tx, fd); });
   TermInput { kill_tx: kill_tx, died_rx: died_rx }
 }
 
@@ -65,10 +69,10 @@ mod libc_poll {
     fn poll(fds: *mut Pollfd, nfds: c_long, timeout: c_int) -> c_int;
   }
 
-  #[deriving(PartialEq)]
+  #[derive(PartialEq)]
   pub enum PollResult {
-    PollReady,
-    PollTimeout,
+    Ready,
+    Timeout,
   }
 
   pub fn poll_fd(fd: c_int, timeout_ms: int) -> PollResult {
@@ -78,20 +82,21 @@ mod libc_poll {
     let poll_result = unsafe {
       poll(&mut pollfd, num_fds, timeout_ms as c_int)
     };
-    if poll_result < 0 { panic!("Unable to poll stdin."); }
-    return if poll_result > 0 { PollReady } else { PollTimeout };
+    if poll_result < 0      { panic!("Unable to poll stdin."); }
+    else if poll_result > 0 { PollResult::Ready }
+    else                    { PollResult::Timeout }
   }
 }
 
 fn input_loop(kill_rx: Receiver<()>, died_tx: Sender<()>,
               key_tx: Sender<keymap::Key>, fd: libc::c_int) {
-  let is_alive = || kill_rx.try_recv() == Err(comm::Empty);
+  let is_alive = |&:| kill_rx.try_recv() == Err(TryRecvError::Empty);
   let mut tk = termkey::TermKey::new(fd, termkey::c::TERMKEY_FLAG_CTRLC);
 
   while is_alive() {
     // check for available input
     let poll_timeout_ms = 10;
-    if libc_poll::poll_fd(fd, poll_timeout_ms) == libc_poll::PollReady {
+    if libc_poll::poll_fd(fd, poll_timeout_ms) == libc_poll::PollResult::Ready {
       // tell termkey that there's input available
       tk.advisereadable();
     }
@@ -99,106 +104,110 @@ fn input_loop(kill_rx: Receiver<()>, died_tx: Sender<()>,
     // empty the fd, translating and sending key events
     loop {
       match tk.getkey() {
-        termkey::None_    => break,  // got nothing, done here
-        termkey::Eof      => panic!("stdin closed, you're on your own."),
-        termkey::Error{errno} =>
+        TermKeyResult::None_        => break,  // got nothing, done here
+        TermKeyResult::Eof          =>
+          panic!("stdin closed, you're on your own."),
+        TermKeyResult::Error{errno} =>
           panic!("termkey::geykey failed with error code {}", errno),
-        termkey::Key(key) => translate_key(key),
-        termkey::Again    =>
+        TermKeyResult::Key(key)     => translate_key(key),
+        TermKeyResult::Again        =>
           // There's input available, but not enough to make a key event. Likely
           // escape has been pushed, which we want to force out and interpret as
           // a key on its own, otherwise oops.
           match tk.getkey_force() {
-            termkey::Key(key) => translate_key(key),
-            termkey::Eof      => panic!("stdin closed, you're on your own."),
-            termkey::Error{errno} =>
+            TermKeyResult::Key(key)     => translate_key(key),
+            TermKeyResult::Eof          =>
+              panic!("stdin closed, you're on your own."),
+            TermKeyResult::Error{errno} =>
               panic!("termkey::geykey_force failed with error code {}", errno),
-            _                 => unreachable!(),
+            _                           => unreachable!(),
           },
       }.map(|key| key_tx.send(key));
     }
   }
 
-  died_tx.send(());
+  died_tx.send(()).unwrap();
 }
 
-fn translate_key(key: termkey::TermKeyEvent) -> Option<keymap::Key> {
+fn translate_key(key: TermKeyEvent) -> Option<keymap::Key> {
   match key {
-    termkey::FunctionEvent{num, mods}              =>
-      Some(keymap::Fn{num: num, mods: translate_mods(mods)}),
-    termkey::KeySymEvent{sym, mods}                =>
-      Some(keymap::Sym{sym: translate_sym(sym), mods: translate_mods(mods)}),
-    termkey::UnicodeEvent{codepoint, mods, utf8:_} =>
-      Some(keymap::Unicode{codepoint: codepoint, mods: translate_mods(mods)}),
-    _                                              =>
+    TermKeyEvent::FunctionEvent{num, mods}                =>
+      Some(keymap::Key::Fn{num: num, mods: translate_mods(mods)}),
+    TermKeyEvent::KeySymEvent{sym, mods}                  =>
+      Some(keymap::Key::Sym{
+        sym: translate_sym(sym), mods: translate_mods(mods)}),
+    TermKeyEvent::UnicodeEvent{codepoint, mods, utf8:_}   =>
+      Some(keymap::Key::Unicode{
+        codepoint: codepoint, mods: translate_mods(mods)}),
+    _                                                     =>
       None,
   }
 }
 
-fn translate_sym(sym: termkey::c::TermKeySym) -> keymap::KeySym {
+fn translate_sym(sym: TermKeySym) -> keymap::KeySym {
   match sym {
-    termkey::c::TERMKEY_SYM_UNKNOWN   => keymap::SymUnknown,
-    termkey::c::TERMKEY_SYM_NONE      => keymap::SymNone,
-    termkey::c::TERMKEY_SYM_BACKSPACE => keymap::SymBackspace,
-    termkey::c::TERMKEY_SYM_TAB       => keymap::SymTab,
-    termkey::c::TERMKEY_SYM_ENTER     => keymap::SymEnter,
-    termkey::c::TERMKEY_SYM_ESCAPE    => keymap::SymEscape,
-    termkey::c::TERMKEY_SYM_SPACE     => keymap::SymSpace,
-    termkey::c::TERMKEY_SYM_DEL       => keymap::SymDel,
-    termkey::c::TERMKEY_SYM_UP        => keymap::SymUp,
-    termkey::c::TERMKEY_SYM_DOWN      => keymap::SymDown,
-    termkey::c::TERMKEY_SYM_LEFT      => keymap::SymLeft,
-    termkey::c::TERMKEY_SYM_RIGHT     => keymap::SymRight,
-    termkey::c::TERMKEY_SYM_BEGIN     => keymap::SymBegin,
-    termkey::c::TERMKEY_SYM_FIND      => keymap::SymFind,
-    termkey::c::TERMKEY_SYM_INSERT    => keymap::SymInsert,
-    termkey::c::TERMKEY_SYM_DELETE    => keymap::SymDelete,
-    termkey::c::TERMKEY_SYM_SELECT    => keymap::SymSelect,
-    termkey::c::TERMKEY_SYM_PAGEUP    => keymap::SymPageup,
-    termkey::c::TERMKEY_SYM_PAGEDOWN  => keymap::SymPagedown,
-    termkey::c::TERMKEY_SYM_HOME      => keymap::SymHome,
-    termkey::c::TERMKEY_SYM_END       => keymap::SymEnd,
-    termkey::c::TERMKEY_SYM_CANCEL    => keymap::SymCancel,
-    termkey::c::TERMKEY_SYM_CLEAR     => keymap::SymClear,
-    termkey::c::TERMKEY_SYM_CLOSE     => keymap::SymClose,
-    termkey::c::TERMKEY_SYM_COMMAND   => keymap::SymCommand,
-    termkey::c::TERMKEY_SYM_COPY      => keymap::SymCopy,
-    termkey::c::TERMKEY_SYM_EXIT      => keymap::SymExit,
-    termkey::c::TERMKEY_SYM_HELP      => keymap::SymHelp,
-    termkey::c::TERMKEY_SYM_MARK      => keymap::SymMark,
-    termkey::c::TERMKEY_SYM_MESSAGE   => keymap::SymMessage,
-    termkey::c::TERMKEY_SYM_MOVE      => keymap::SymMove,
-    termkey::c::TERMKEY_SYM_OPEN      => keymap::SymOpen,
-    termkey::c::TERMKEY_SYM_OPTIONS   => keymap::SymOptions,
-    termkey::c::TERMKEY_SYM_PRINT     => keymap::SymPrint,
-    termkey::c::TERMKEY_SYM_REDO      => keymap::SymRedo,
-    termkey::c::TERMKEY_SYM_REFERENCE => keymap::SymReference,
-    termkey::c::TERMKEY_SYM_REFRESH   => keymap::SymRefresh,
-    termkey::c::TERMKEY_SYM_REPLACE   => keymap::SymReplace,
-    termkey::c::TERMKEY_SYM_RESTART   => keymap::SymRestart,
-    termkey::c::TERMKEY_SYM_RESUME    => keymap::SymResume,
-    termkey::c::TERMKEY_SYM_SAVE      => keymap::SymSave,
-    termkey::c::TERMKEY_SYM_SUSPEND   => keymap::SymSuspend,
-    termkey::c::TERMKEY_SYM_UNDO      => keymap::SymUndo,
-    termkey::c::TERMKEY_SYM_KP0       => keymap::SymKP0,
-    termkey::c::TERMKEY_SYM_KP1       => keymap::SymKP1,
-    termkey::c::TERMKEY_SYM_KP2       => keymap::SymKP2,
-    termkey::c::TERMKEY_SYM_KP3       => keymap::SymKP3,
-    termkey::c::TERMKEY_SYM_KP4       => keymap::SymKP4,
-    termkey::c::TERMKEY_SYM_KP5       => keymap::SymKP5,
-    termkey::c::TERMKEY_SYM_KP6       => keymap::SymKP6,
-    termkey::c::TERMKEY_SYM_KP7       => keymap::SymKP7,
-    termkey::c::TERMKEY_SYM_KP8       => keymap::SymKP8,
-    termkey::c::TERMKEY_SYM_KP9       => keymap::SymKP9,
-    termkey::c::TERMKEY_SYM_KPENTER   => keymap::SymKPEnter,
-    termkey::c::TERMKEY_SYM_KPPLUS    => keymap::SymKPPlus,
-    termkey::c::TERMKEY_SYM_KPMINUS   => keymap::SymKPMinus,
-    termkey::c::TERMKEY_SYM_KPMULT    => keymap::SymKPMult,
-    termkey::c::TERMKEY_SYM_KPDIV     => keymap::SymKPDiv,
-    termkey::c::TERMKEY_SYM_KPCOMMA   => keymap::SymKPComma,
-    termkey::c::TERMKEY_SYM_KPPERIOD  => keymap::SymKPPeriod,
-    termkey::c::TERMKEY_SYM_KPEQUALS  => keymap::SymKPEquals,
-    termkey::c::TERMKEY_N_SYMS        => keymap::SymNSyms,
+    TermKeySym::TERMKEY_SYM_UNKNOWN   => keymap::KeySym::Unknown,
+    TermKeySym::TERMKEY_SYM_NONE      => keymap::KeySym::None,
+    TermKeySym::TERMKEY_SYM_BACKSPACE => keymap::KeySym::Backspace,
+    TermKeySym::TERMKEY_SYM_TAB       => keymap::KeySym::Tab,
+    TermKeySym::TERMKEY_SYM_ENTER     => keymap::KeySym::Enter,
+    TermKeySym::TERMKEY_SYM_ESCAPE    => keymap::KeySym::Escape,
+    TermKeySym::TERMKEY_SYM_SPACE     => keymap::KeySym::Space,
+    TermKeySym::TERMKEY_SYM_DEL       => keymap::KeySym::Del,
+    TermKeySym::TERMKEY_SYM_UP        => keymap::KeySym::Up,
+    TermKeySym::TERMKEY_SYM_DOWN      => keymap::KeySym::Down,
+    TermKeySym::TERMKEY_SYM_LEFT      => keymap::KeySym::Left,
+    TermKeySym::TERMKEY_SYM_RIGHT     => keymap::KeySym::Right,
+    TermKeySym::TERMKEY_SYM_BEGIN     => keymap::KeySym::Begin,
+    TermKeySym::TERMKEY_SYM_FIND      => keymap::KeySym::Find,
+    TermKeySym::TERMKEY_SYM_INSERT    => keymap::KeySym::Insert,
+    TermKeySym::TERMKEY_SYM_DELETE    => keymap::KeySym::Delete,
+    TermKeySym::TERMKEY_SYM_SELECT    => keymap::KeySym::Select,
+    TermKeySym::TERMKEY_SYM_PAGEUP    => keymap::KeySym::Pageup,
+    TermKeySym::TERMKEY_SYM_PAGEDOWN  => keymap::KeySym::Pagedown,
+    TermKeySym::TERMKEY_SYM_HOME      => keymap::KeySym::Home,
+    TermKeySym::TERMKEY_SYM_END       => keymap::KeySym::End,
+    TermKeySym::TERMKEY_SYM_CANCEL    => keymap::KeySym::Cancel,
+    TermKeySym::TERMKEY_SYM_CLEAR     => keymap::KeySym::Clear,
+    TermKeySym::TERMKEY_SYM_CLOSE     => keymap::KeySym::Close,
+    TermKeySym::TERMKEY_SYM_COMMAND   => keymap::KeySym::Command,
+    TermKeySym::TERMKEY_SYM_COPY      => keymap::KeySym::Copy,
+    TermKeySym::TERMKEY_SYM_EXIT      => keymap::KeySym::Exit,
+    TermKeySym::TERMKEY_SYM_HELP      => keymap::KeySym::Help,
+    TermKeySym::TERMKEY_SYM_MARK      => keymap::KeySym::Mark,
+    TermKeySym::TERMKEY_SYM_MESSAGE   => keymap::KeySym::Message,
+    TermKeySym::TERMKEY_SYM_MOVE      => keymap::KeySym::Move,
+    TermKeySym::TERMKEY_SYM_OPEN      => keymap::KeySym::Open,
+    TermKeySym::TERMKEY_SYM_OPTIONS   => keymap::KeySym::Options,
+    TermKeySym::TERMKEY_SYM_PRINT     => keymap::KeySym::Print,
+    TermKeySym::TERMKEY_SYM_REDO      => keymap::KeySym::Redo,
+    TermKeySym::TERMKEY_SYM_REFERENCE => keymap::KeySym::Reference,
+    TermKeySym::TERMKEY_SYM_REFRESH   => keymap::KeySym::Refresh,
+    TermKeySym::TERMKEY_SYM_REPLACE   => keymap::KeySym::Replace,
+    TermKeySym::TERMKEY_SYM_RESTART   => keymap::KeySym::Restart,
+    TermKeySym::TERMKEY_SYM_RESUME    => keymap::KeySym::Resume,
+    TermKeySym::TERMKEY_SYM_SAVE      => keymap::KeySym::Save,
+    TermKeySym::TERMKEY_SYM_SUSPEND   => keymap::KeySym::Suspend,
+    TermKeySym::TERMKEY_SYM_UNDO      => keymap::KeySym::Undo,
+    TermKeySym::TERMKEY_SYM_KP0       => keymap::KeySym::KP0,
+    TermKeySym::TERMKEY_SYM_KP1       => keymap::KeySym::KP1,
+    TermKeySym::TERMKEY_SYM_KP2       => keymap::KeySym::KP2,
+    TermKeySym::TERMKEY_SYM_KP3       => keymap::KeySym::KP3,
+    TermKeySym::TERMKEY_SYM_KP4       => keymap::KeySym::KP4,
+    TermKeySym::TERMKEY_SYM_KP5       => keymap::KeySym::KP5,
+    TermKeySym::TERMKEY_SYM_KP6       => keymap::KeySym::KP6,
+    TermKeySym::TERMKEY_SYM_KP7       => keymap::KeySym::KP7,
+    TermKeySym::TERMKEY_SYM_KP8       => keymap::KeySym::KP8,
+    TermKeySym::TERMKEY_SYM_KP9       => keymap::KeySym::KP9,
+    TermKeySym::TERMKEY_SYM_KPENTER   => keymap::KeySym::KPEnter,
+    TermKeySym::TERMKEY_SYM_KPPLUS    => keymap::KeySym::KPPlus,
+    TermKeySym::TERMKEY_SYM_KPMINUS   => keymap::KeySym::KPMinus,
+    TermKeySym::TERMKEY_SYM_KPMULT    => keymap::KeySym::KPMult,
+    TermKeySym::TERMKEY_SYM_KPDIV     => keymap::KeySym::KPDiv,
+    TermKeySym::TERMKEY_SYM_KPCOMMA   => keymap::KeySym::KPComma,
+    TermKeySym::TERMKEY_SYM_KPPERIOD  => keymap::KeySym::KPPeriod,
+    TermKeySym::TERMKEY_SYM_KPEQUALS  => keymap::KeySym::KPEquals,
+    TermKeySym::TERMKEY_N_SYMS        => keymap::KeySym::NSyms,
   }
 }
 
@@ -221,10 +230,11 @@ mod test {
   extern crate time;
 
   use super::libc;
-  use std::comm;
+  use std::sync::mpsc::{channel, Sender};
   use std::io::pipe::PipeStream;
   use std::io::timer;
   use std::os;
+  use std::thread::Thread;
   use std::time::duration::Duration;
 
   use keymap;
@@ -236,21 +246,21 @@ mod test {
     // pairs of input bytes on "stdin" and corresponding expected key output
     let input_output_pairs = vec!(
       (vec!(0x61),
-        keymap::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}),
+        keymap::Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}),
       (vec!(0x1B, 0x61),
-        keymap::Unicode{codepoint: 'a', mods: keymap::MOD_ALT}),
+        keymap::Key::Unicode{codepoint: 'a', mods: keymap::MOD_ALT}),
       (vec!(0x1B),
-        keymap::Sym{sym: keymap::SymEscape, mods: keymap::MOD_NONE}),
+        keymap::Key::Sym{sym: keymap::KeySym::Escape, mods: keymap::MOD_NONE}),
       (vec!(0x61),
-        keymap::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}),
+        keymap::Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}),
       (vec!(0x03),
-        keymap::Unicode{codepoint: 'c', mods: keymap::MOD_CTRL}),
+        keymap::Key::Unicode{codepoint: 'c', mods: keymap::MOD_CTRL}),
       (vec!(0x1B, 0x5B, 0x41),
-        keymap::Sym{sym: keymap::SymUp, mods: keymap::MOD_NONE}),
+        keymap::Key::Sym{sym: keymap::KeySym::Up, mods: keymap::MOD_NONE}),
       (vec!(0x1B, 0x4F, 0x53),
-        keymap::Fn{num: 4, mods: keymap::MOD_NONE}),
+        keymap::Key::Fn{num: 4, mods: keymap::MOD_NONE}),
       (vec!(0xE3, 0x81, 0x82),
-        keymap::Unicode{codepoint: 'あ', mods: keymap::MOD_NONE}),
+        keymap::Key::Unicode{codepoint: 'あ', mods: keymap::MOD_NONE}),
     );
 
     let inputs: Vec<Vec<u8>> =
@@ -259,7 +269,7 @@ mod test {
       input_output_pairs.iter().map(|&(_, ref o)| o.clone()).collect();
 
     // set up communication channels
-    let (key_tx, key_rx) = comm::channel();
+    let (key_tx, key_rx) = channel();
     let os::Pipe { reader, writer } = unsafe { os::pipe().unwrap() };
 
     // start input listener
@@ -271,14 +281,14 @@ mod test {
     impl Drop for PipeKiller {
       fn drop(&mut self) {
         unsafe { libc::close(self.reader); }
-        self.close_writer_tx.send(());
+        self.close_writer_tx.send(()).unwrap();
       }
     }
     let _pipe_killer =
       PipeKiller { close_writer_tx: close_writer_tx, reader: reader };
 
     // simulate keyboard input
-    spawn(proc() {
+    Thread::spawn(move || {
       let mut pipe_out = PipeStream::open(writer);
       for input in inputs.iter() {
         pipe_out.write(input.as_slice()).unwrap();
@@ -286,7 +296,7 @@ mod test {
         timer::sleep(Duration::milliseconds(1));
       }
       // keep the pipe alive until we're finished with it
-      close_writer_rx.recv();
+      close_writer_rx.recv().unwrap();
     });
 
     // receive key outputs and match with expectations

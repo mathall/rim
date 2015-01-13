@@ -3,10 +3,24 @@ name = "rim"
 version = "0.0.1"
 dependencies = [
  "termkey 0.17.5 (git+git://github.com/mathall/termkey-rs.git)",
+ "time 0.1.12 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "gcc"
+version = "0.1.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "termkey"
 version = "0.17.5"
-source = "git+git://github.com/mathall/termkey-rs.git#c864e4d212b72debc69105853e8a2a1fce22ff47"
+source = "git+git://github.com/mathall/termkey-rs.git#9b90aa1e160bd5a443820b8f589e803f564b8761"
+
+[[package]]
+name = "time"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+dependencies = [
+ "gcc 0.1.4 (registry+https://github.com/rust-lang/crates.io-index)",
+]
 
