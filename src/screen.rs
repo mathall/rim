@@ -11,9 +11,10 @@ extern crate term;
 use std::cmp;
 use std::ops::{Add, Sub};
 
-#[derive(Copy, PartialEq)]
+#[derive(Copy, PartialEq, Show)]
 pub struct Size(pub u16, pub u16);
 
+#[cfg(not(test))]
 impl Size {
   fn from_cell(Cell(row, col): Cell) -> Size {
     Size(row, col)
@@ -23,6 +24,7 @@ impl Size {
 #[derive(Copy)]
 pub struct Cell(pub u16, pub u16);
 
+#[cfg(not(test))]
 impl Cell {
   fn within(self, size: Size) -> Option<Cell> {
     let Cell(cell_row, cell_col) = self;
@@ -54,17 +56,30 @@ impl Sub for Cell {
   }
 }
 
+#[derive(Copy)]
+pub struct Rect(pub Cell, pub Size);
+
+impl Rect {
+  pub fn contains(&self, Cell(row, col): Cell) -> bool {
+    let Rect(Cell(start_row, start_col), Size(rows, cols)) = *self;
+    row >= start_row && row < start_row + rows &&
+      col >= start_col && col < start_col + cols
+  }
+}
+
 /*
  * Iterates over a region of the screen, defined by a starting cell and a size.
  */
+#[cfg(not(test))]
 pub struct CellIterator {
   next_cell: Option<Cell>,
   size: Size,
   width: u16,
 }
 
+#[cfg(not(test))]
 impl CellIterator {
-  pub fn new(start: Cell, size: Size) -> CellIterator {
+  pub fn new(Rect(start, size): Rect) -> CellIterator {
     let Size(_, rel_end_col) = size;
     let abs_size = Size::from_cell(start + Cell::from_size(size));
     CellIterator {
@@ -73,6 +88,7 @@ impl CellIterator {
   }
 }
 
+#[cfg(not(test))]
 impl Iterator for CellIterator {
   type Item = Cell;
 
@@ -89,11 +105,13 @@ impl Iterator for CellIterator {
  * Screen is the output surface. You can put characters within its borders and
  * clear it again. Go nuts!
  */
+#[cfg(not(test))]
 pub struct Screen {
   size: Size,
   terminal: Terminal,
 }
 
+#[cfg(not(test))]
 impl Drop for Screen {
   fn drop(&mut self) {
     self.terminal.clear();
@@ -102,6 +120,7 @@ impl Drop for Screen {
   }
 }
 
+#[cfg(not(test))]
 impl Screen {
   pub fn setup() -> Result<Screen, String> {
     Terminal::new().map_or(
@@ -151,10 +170,12 @@ impl Screen {
  * Terminal is a simple wrapper that provides some helpful methods for common
  * ouput operations.
  */
+#[cfg(not(test))]
 struct Terminal {
   terminal: Box<term::Terminal<term::WriterWrapper> + Send>,
 }
 
+#[cfg(not(test))]
 impl Terminal {
   pub fn new() -> Option<Terminal> {
     term::stdout().map(|terminal| Terminal { terminal: terminal })
@@ -206,6 +227,7 @@ impl Terminal {
  * Color values for terminal output.
  */
 #[allow(dead_code)]  // colors are not used much yet
+#[cfg(not(test))]
 #[derive(Copy)]
 pub enum Color {
   Black,
@@ -227,6 +249,7 @@ pub enum Color {
 }
 
 #[allow(dead_code)]  // colors are not used much yet
+#[cfg(not(test))]
 impl Color {
   pub fn to_term_color(&self) -> term::color::Color {
     match *self {
@@ -253,6 +276,7 @@ impl Color {
 /*
  * Helper module to capture the ugly. Provides a mean to poll the screen size.
  */
+#[cfg(not(test))]
 mod term_size {
   extern crate libc;
 

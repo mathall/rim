@@ -12,3 +12,4 @@ git = "git://github.com/mathall/termkey-rs.git"
 
 [dependencies]
 time = "*"
+uuid = "*"
