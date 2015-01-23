@@ -264,9 +264,9 @@ mod test {
     );
 
     let inputs: Vec<Vec<u8>> =
-      input_output_pairs.iter().map(|&(ref i, _)| i.clone()).collect();
+      input_output_pairs.iter().map(|&(ref input, _)| input.clone()).collect();
     let outputs: Vec<keymap::Key> =
-      input_output_pairs.iter().map(|&(_, ref o)| o.clone()).collect();
+      input_output_pairs.iter().map(|&(_, output)| output).collect();
 
     // set up communication channels
     let (key_tx, key_rx) = channel();
