@@ -95,14 +95,22 @@ impl PageTree {
   // See comment for offset_of_line_start and add to that quirk the requirement
   // that |column| == 0.
   fn line_column_to_offset(&self, line: uint, column: uint) -> Option<uint> {
-    self.offset_of_line_start(line).and_then(
+    self.line_start_and_end_offset(line).and_then(
+      |(line_start_offset, line_end_offset)| {
+        let line_length = line_end_offset - line_start_offset;
+        let offset = line_start_offset + column;
+        if column == 0 || column < line_length { Some(offset) } else { None }
+      })
+  }
+
+  // end may equal start if the file is empty
+  fn line_start_and_end_offset(&self, line: uint) -> Option<(uint, uint)> {
+    self.offset_of_line_start(line).map(
       |line_start_offset| {
         let line_end_offset =
           self.offset_of_line_start(line + 1).unwrap_or(self.length);
         assert!(line_end_offset >= line_start_offset);
-        let line_length = line_end_offset - line_start_offset;
-        let offset = line_start_offset + column;
-        if column == 0 || column < line_length { Some(offset) } else { None }
+        (line_start_offset, line_end_offset)
       })
   }
 
@@ -577,6 +585,28 @@ impl Buffer {
       -> Option<char> {
     self.tree.get_char_by_line_column(line, column)
   }
+
+  // if the file doesn't end with a newline, the characters after the last
+  // newline will still be counted as just another line
+  pub fn num_lines(&self) -> uint {
+    if self.tree.length == 0 { 0 } else {
+      let borked_last_line = self.tree.get_char_by_offset(self.tree.length - 1).
+                             map(|c| c != '\n').unwrap();
+      self.tree.newlines + if borked_last_line { 1 } else { 0 }
+    }
+  }
+
+  // excludes newline character from the count if the line has one
+  pub fn line_length(&self, line: uint) -> Option<uint> {
+    if self.tree.length == 0 { None } else {
+      self.tree.line_start_and_end_offset(line).
+      map(|(start_offset, end_offset)| {
+        assert!(start_offset < end_offset);
+        let borked_line = self.tree.get_char_by_offset(end_offset - 1).
+                          map(|c| c != '\n').unwrap();
+        end_offset - start_offset - if borked_line { 0 } else { 1 } })
+    }
+  }
 }
 
 #[cfg(test)]
@@ -759,6 +789,28 @@ mod test {
     let buffer = super::Buffer::open(&test_path).unwrap();
     for &((line, column), expect_char) in tests.iter() {
       assert_eq!(buffer.get_char_by_line_column(line, column), expect_char);
+    }
+  }
+
+  #[test]
+  fn line_length() {
+    let path = Path::new("tests/buffer/long_string_insert.txt");
+    let expect = [141, 48, 152];
+    line_length_test(&path, &expect);
+  }
+
+  #[test]
+  fn line_length_when_lacking_newline() {
+    let path = Path::new("tests/buffer/lacking_newline.txt");
+    let expect = [4, 0, 4];
+    line_length_test(&path, &expect);
+  }
+
+  fn line_length_test(path: &Path, expect: &[uint]) {
+    let buffer = super::Buffer::open(path).unwrap();
+    assert_eq!(buffer.num_lines(), expect.len());
+    for line in range(0, buffer.num_lines()) {
+      assert_eq!(buffer.line_length(line).unwrap(), expect[line]);
     }
   }
 }
