@@ -11,5 +11,6 @@ name = "rim"
 git = "git://github.com/mathall/termkey-rs.git"
 
 [dependencies]
+bitflags = "*"
 time = "*"
 uuid = "*"

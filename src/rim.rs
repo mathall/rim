@@ -11,6 +11,9 @@
 #![feature(int_uint)]
 #![feature(slicing_syntax)]
 
+#[macro_use]
+extern crate bitflags;
+
 #[cfg(not(test))]
 use std::collections::HashSet;
 
