@@ -11,6 +11,7 @@ extern crate uuid;
 use std::cmp;
 use std::collections::{HashMap, ring_buf, RingBuf};
 use std::error;
+use std::fmt;
 use std::mem;
 
 use screen;
@@ -590,6 +591,12 @@ pub enum FrameError {
   NoNeighbouringWindow,
   NoSuchSequentWindow,
   NoSuchAdjacentWindow,
+}
+
+impl fmt::Display for FrameError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "{:?}", *self)
+  }
 }
 
 impl error::Error for FrameError {
