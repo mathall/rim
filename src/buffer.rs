@@ -326,14 +326,19 @@ impl PageTree {
     self.height = 1 + cmp::max(self.left.height(), self.right.height());
   }
 
-  fn find_page_by_offset<'l>(&'l self, offset: uint) -> Option<&'l Page> {
+  // Optionally returns the page containing a certain offset along with total
+  // offset building up to the start of it.
+  fn find_page_by_offset<'l>(&'l self, offset: uint)
+      -> Option<(&'l Page, uint)> {
     if offset >= self.length { return None; }
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
-    match if go_left { &self.left } else { &self.right } {
+    let res = match if go_left { &self.left } else { &self.right } {
       &Nil            => None,
       &Tree(ref tree) => tree.find_page_by_offset(new_offset),
-      &Leaf(ref page) => Some(&*page),
-    }
+      &Leaf(ref page) => Some((&*page, 0)),
+    };
+    res.map(|(page, offset)|
+      (page, offset + if go_left { 0 } else { self.left.length() }))
   }
 
   fn decide_branch_by_offset(&self, offset: uint) -> (bool, uint) {
@@ -349,7 +354,7 @@ impl PageTree {
   }
 
   fn iter(&self) -> PageTreeIterator {
-    PageTreeIterator::new(self)
+    PageTreeIterator::new(self, 0)
   }
 }
 
@@ -358,12 +363,12 @@ impl PageTree {
  */
 struct PageTreeIterator<'l> {
   tree: &'l PageTree,
-  offset: uint,
+  next_offset: uint,
 }
 
 impl<'l> PageTreeIterator<'l> {
-  fn new(tree: &'l PageTree) -> PageTreeIterator<'l> {
-    PageTreeIterator { tree: tree, offset: 0 }
+  fn new(tree: &'l PageTree, start_offset: uint) -> PageTreeIterator<'l> {
+    PageTreeIterator { tree: tree, next_offset: start_offset }
   }
 }
 
@@ -371,8 +376,75 @@ impl<'l> Iterator for PageTreeIterator<'l> {
   type Item = &'l Page;
 
   fn next(&mut self) -> Option<&'l Page> {
-    self.tree.find_page_by_offset(self.offset).map(
-      |page| { self.offset += page.length; page })
+    self.tree.find_page_by_offset(self.next_offset).map(
+      |(page, offset)| { self.next_offset = offset + page.length; page })
+  }
+}
+
+/*
+ * CharIterator iterates the characters of a page tree between the given start
+ * and end offsets.
+ */
+struct CharIterator<'l> {
+  counter: uint,
+  pages: PageTreeIterator<'l>,
+  chars: Option<::std::str::Chars<'l>>,
+}
+
+impl<'l> CharIterator<'l> {
+  fn new(tree: &'l PageTree, start: uint, end: uint) -> CharIterator<'l> {
+    assert!(start < end && end <= tree.length);
+    let mut pages = PageTreeIterator::new(tree, start);
+    let page = pages.next().unwrap();
+    let mut chars = page.data.as_slice().chars();
+    for _ in range(0, start - pages.next_offset + page.length) {
+      chars.next();
+    }
+    CharIterator {
+      counter: end - start,
+      pages: pages,
+      chars: Some(chars),
+    }
+  }
+}
+
+impl<'l> Iterator for CharIterator<'l> {
+  type Item = char;
+
+  fn next(&mut self) -> Option<char> {
+    if self.counter == 0 { None } else {
+      self.counter -= 1;
+      self.chars.as_mut().and_then(|ref mut chars| chars.next()).or_else(|| {
+        self.chars = self.pages.next().map(|page| page.data.as_slice().chars());
+        self.chars.as_mut().and_then(|ref mut chars| chars.next()) })
+    }
+  }
+}
+
+/*
+ * LineIterator iterates the lines of a page tree, yielding a CharIterator for
+ * each line.
+ */
+struct LineIterator<'l> {
+  tree: &'l PageTree,
+  next_line: uint
+}
+
+impl<'l> LineIterator<'l> {
+  fn new(tree: &'l PageTree) -> LineIterator {
+    LineIterator { tree: tree, next_line: 0 }
+  }
+}
+
+impl<'l> Iterator for LineIterator<'l> {
+  type Item = CharIterator<'l>;
+
+  fn next(&mut self) -> Option<CharIterator<'l>> {
+    self.tree.line_start_and_end_offset(self.next_line).
+    and_then(|(start, end)| if start != end { Some((start, end)) }
+                            else            { None }).
+    map(|(start, end)| CharIterator::new(self.tree, start, end)).
+    map(|it| { self.next_line += 1; it })
   }
 }
 
@@ -607,6 +679,10 @@ impl Buffer {
         end_offset - start_offset - if borked_line { 0 } else { 1 } })
     }
   }
+
+  pub fn line_iter(&self) -> LineIterator {
+    LineIterator::new(&self.tree)
+  }
 }
 
 #[cfg(test)]
@@ -802,7 +878,7 @@ mod test {
   #[test]
   fn line_length_when_lacking_newline() {
     let path = Path::new("tests/buffer/lacking_newline.txt");
-    let expect = [4, 0, 4];
+    let expect = [3, 0, 4];
     line_length_test(&path, &expect);
   }
 
@@ -812,5 +888,38 @@ mod test {
     for line in range(0, buffer.num_lines()) {
       assert_eq!(buffer.line_length(line).unwrap(), expect[line]);
     }
+  }
+
+  #[test]
+  fn line_iterator_yields_all_lines() {
+    let path = Path::new("tests/buffer/lacking_newline.txt");
+    let buffer = super::Buffer::open(&path).unwrap();
+    assert_eq!(buffer.line_iter().count(), buffer.num_lines());
+  }
+
+  #[test]
+  fn line_iterator_yields_correct_line_lengths() {
+    let path = Path::new("tests/buffer/long_string_insert.txt");
+    let buffer = super::Buffer::open(&path).unwrap();
+    let mut line = 0;
+    for mut chars in buffer.line_iter() {
+      assert_eq!(buffer.line_length(line), Some(chars.count() - 1));
+      line += 1;
+    }
+    assert_eq!(line, buffer.num_lines());
+  }
+
+  #[test]
+  fn char_iterator_yields_all_chars() {
+    let path = Path::new("tests/buffer/lacking_newline.txt");
+    let buffer = super::Buffer::open(&path).unwrap();
+    let mut offset = 0;
+    for mut chars in buffer.line_iter() {
+      for character in chars {
+        assert_eq!(buffer.tree.get_char_by_offset(offset), Some(character));
+        offset += 1;
+      }
+    }
+    assert_eq!(offset, buffer.tree.length);
   }
 }
