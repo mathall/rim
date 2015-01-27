@@ -9,6 +9,8 @@
 extern crate term;
 
 use std::cmp;
+#[cfg(not(test))]
+use std::iter;
 use std::ops::{Add, Sub};
 
 #[derive(Copy, PartialEq, Show)]
@@ -109,6 +111,7 @@ impl Iterator for CellIterator {
 pub struct Screen {
   size: Size,
   terminal: Terminal,
+  buffer: ScreenBuffer,
 }
 
 #[cfg(not(test))]
@@ -129,19 +132,20 @@ impl Screen {
         terminal.enable_altscreen();
         terminal.hide_cursor();
         terminal.clear();
-        Ok(Screen { size: Size(0, 0), terminal: terminal })
+        Ok(Screen {
+          size: Size(0, 0),
+          terminal: terminal,
+          buffer: ScreenBuffer::new()
+        })
       })
   }
 
   pub fn update_size(&mut self) -> bool {
-    match term_size::size().map(|(rows, cols)| Size(rows, cols)) {
-      None               => return false,
-      Some(current_size) => {
-        let size_changed = current_size != self.size;
-        self.size = current_size;
-        return size_changed;
-      }
-    }
+    term_size::size().map(|(rows, cols)| Size(rows, cols)).
+    and_then(|new_size| if new_size == self.size { None } else { Some({
+      self.buffer.resize(new_size);
+      self.size = new_size; }) }).
+    is_some()
   }
 
   pub fn size(&self) -> Size {
@@ -150,19 +154,77 @@ impl Screen {
 
   pub fn clear(&mut self) {
     self.terminal.clear();
+    self.buffer.clear();
   }
 
   pub fn put(&mut self, position: Cell, character: char, fg: Color, bg: Color) {
     position.within(self.size).map(|Cell(row, col)| {
-      self.terminal.set_cursor_position(row, col);
-      self.terminal.set_fg(fg);
-      self.terminal.set_bg(bg);
-      self.terminal.put(character);
+      if self.buffer.update(position, character, fg, bg) {
+        self.terminal.set_cursor_position(row, col);
+        self.terminal.set_fg(fg);
+        self.terminal.set_bg(bg);
+        self.terminal.put(character);
+      }
     });
   }
 
   pub fn flush(&mut self) {
     self.terminal.flush();
+  }
+}
+
+/*
+ * ScreenBuffer mirrors what's known to be on the screen, allowing us to draw
+ * new information only when necessary.
+ */
+#[cfg(not(test))]
+struct ScreenBuffer {
+  cells: Vec<Option<(char, Color, Color)>>,
+  width: u16,
+}
+
+#[cfg(not(test))]
+impl ScreenBuffer {
+  fn new() -> ScreenBuffer {
+    ScreenBuffer { cells: Vec::new(), width: 0 }
+  }
+
+  fn resize(&mut self, Size(rows, cols): Size) {
+    let size = rows as uint * cols as uint;
+    let diff = size as int - self.cells.len() as int;
+    if diff > 0 {
+      self.cells.reserve_exact(size);
+      self.cells.extend(iter::repeat(None).take(diff as uint))
+    }
+    else if diff < 0 {
+      self.cells.truncate(size);
+      self.cells.shrink_to_fit();
+    }
+    self.width = cols;
+  }
+
+  fn clear(&mut self) {
+    for i in range(0, self.cells.len()) {
+      self.cells[i] = None;
+    }
+  }
+
+  // a character taking up multiple screen columns is represented in the buffer
+  // by one Some(character) followed by Nones in the additional cells it covers
+  fn update(&mut self, Cell(row, col): Cell, character: char, fg: Color,
+      bg: Color) -> bool {
+    let cell = Some((character, fg, bg));
+    let idx = (row as uint * self.width as uint) + col as uint;
+    let buffer_size = self.cells.len();
+    let nones = |&:| range(1, CharExt::width(character, false).unwrap_or(1)).
+                     map(|i| idx + i).filter(|i| *i < buffer_size);
+    let update =
+      self.cells[idx] != cell || nones().any(|i| self.cells[i] != None);
+    if update {
+      self.cells[idx] = cell;
+      for i in nones() { self.cells[i] = None; }
+    }
+    update
   }
 }
 
@@ -228,7 +290,7 @@ impl Terminal {
  */
 #[allow(dead_code)]  // colors are not used much yet
 #[cfg(not(test))]
-#[derive(Copy)]
+#[derive(Clone, Copy, PartialEq)]
 pub enum Color {
   Black,
   Red,
