@@ -31,7 +31,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 [[package]]
 name = "termkey"
 version = "0.17.5"
-source = "git+git://github.com/mathall/termkey-rs.git#1f1091760717d25688c2035dc6fec898fd62ed71"
+source = "git+git://github.com/mathall/termkey-rs.git#b4853f05d37148f4e86e988356b39f7f9c7a86d2"
 dependencies = [
  "bitflags 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
