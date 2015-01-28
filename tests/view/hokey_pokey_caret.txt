@@ -1,0 +1,15 @@
+move to empty line
+
+
+move to end of double width character then back again
+全角文字
+
+move to shorter lines then back again
+move to shorter
+move to shorter lines
+
+move to shorter line, step sideways, spin around a little bit, then back again
+I'm like the caller at a square dance and the caret is my lone dancer
+
+move to end of line lacking newline
+move to end of line lacking newline

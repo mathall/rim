@@ -15,7 +15,7 @@
 extern crate bitflags;
 
 #[cfg(not(test))]
-use std::collections::HashSet;
+use std::collections::HashMap;
 
 #[allow(dead_code, unused_imports)]  // temporary until buffer is used for real
 mod buffer;
@@ -23,12 +23,13 @@ mod frame;
 mod input;
 mod keymap;
 mod screen;
+mod view;
 
 #[cfg(not(test))]
 struct Rim {
   frame: frame::Frame,
   frame_ctx: frame::FrameContext,
-  windows: HashSet<frame::WindowId>,
+  windows: HashMap<frame::WindowId, view::View>,
   focus: frame::WindowId,
   buffer: buffer::Buffer,
 }
@@ -37,8 +38,8 @@ struct Rim {
 impl Rim {
   fn new() -> Rim {
     let (frame, frame_ctx, first_window) = frame::Frame::new();
-    let mut windows: HashSet<frame::WindowId> = HashSet::new();
-    windows.insert(first_window.clone());
+    let mut windows = HashMap::new();
+    windows.insert(first_window.clone(), view::View::new());
     Rim {
       frame: frame,
       frame_ctx: frame_ctx,
@@ -68,7 +69,8 @@ impl Rim {
 
   fn split_window(&mut self, orientation: frame::Orientation) {
     self.frame.split_window(&mut self.frame_ctx, &self.focus, orientation).
-    map(|new_window| self.windows.insert(new_window)).unwrap();
+    map(|new_window| self.windows.insert(new_window, view::View::new())).
+    ok().expect("Failed to split window.");
   }
 
   fn resize_window(&mut self, orientation: frame::Orientation, amount: int)
@@ -87,43 +89,67 @@ impl Rim {
   }
 
   fn draw_window(&self, window: &frame::WindowId, screen: &mut screen::Screen) {
-    let focused = self.focus == *window;
-    self.frame.get_window_rect(&self.frame_ctx, window).
-    map(|rect| self.draw_buffer(focused, rect, screen)).
-    unwrap();
+    self.windows.get(window).
+    map(|view| self.draw_view(window, view, screen)).
+    expect("Couldn't find view for window.");
     screen.flush();
   }
 
-  fn draw_buffer(&self, focused: bool, rect: screen::Rect,
-                 screen: &mut screen::Screen) {
-    let mut skip_cols = 0u;
-    for screen_cell in screen::CellIterator::new(rect) {
-      let screen::Rect(position, _) = rect;
-      let screen::Cell(line, column) = screen_cell - position;
-      if column == 0 { skip_cols = 0; }
-      if skip_cols > 0 { skip_cols -= 1; continue; }
-      let character =
-        self.buffer.get_char_by_line_column(line as uint, column as uint).
-        map(|character| if character == '\n' { ' ' } else { character }).
-        unwrap_or(if column == 0 { '~' } else { ' ' });
-      let (fg, bg) = if focused {
-        (screen::Color::Black, screen::Color::White)
-      }
-      else {
-        (screen::Color::White, screen::Color::Black)
-      };
-      screen.put(screen_cell, character, fg, bg);
-      skip_cols = CharExt::width(character, false).unwrap_or(1) - 1;
-    }
+  fn draw_view(&self, window: &frame::WindowId, view: &view::View,
+               screen: &mut screen::Screen) {
+    self.frame.get_window_rect(&self.frame_ctx, window).
+    map(|rect| { let screen::Rect(position, _) = rect; position }).
+    map(|pos| view.draw(&self.buffer, self.focus == *window, pos, screen)).
+    ok().expect("Couldn't find rect for window.");
   }
 
   fn draw_all(&self, screen: &mut screen::Screen) {
     screen.clear();
     self.frame.draw_borders(screen);
-    for window in self.windows.iter() {
-      self.draw_window(window, screen);
+    for (window, view) in self.windows.iter() {
+      self.draw_view(window, view, screen);
     }
     screen.flush();
+  }
+
+  fn update_view_sizes(&mut self) {
+    let window_sizes: Vec<(frame::WindowId, screen::Size)> =
+      self.windows.iter().
+      map(|(win, _)|
+        self.frame.get_window_rect(&self.frame_ctx, win).
+        map(|rect| { let screen::Rect(_, size) = rect; (win.clone(), size) }).
+        ok().expect("Couldn't find rect for window.")).
+      collect();
+    for &(ref win, size) in window_sizes.iter() {
+      self.windows.remove(win).
+      map(|mut view| {
+        view.set_size(size, &self.buffer);
+        self.windows.insert(win.clone(), view); }).
+      expect("Couldn't find view for window.");
+    }
+  }
+
+  fn handle_key_by_view(&mut self, key: keymap::Key) -> bool {
+     self.windows.remove(&self.focus).
+     map(|mut view| {
+       let swallowed = match key {
+         keymap::Key::Sym{sym: keymap::KeySym::Left, mods:_}  => {
+           view.move_caret(view::CaretMovement::CharPrev, &self.buffer); true
+         }
+         keymap::Key::Sym{sym: keymap::KeySym::Right, mods:_} => {
+           view.move_caret(view::CaretMovement::CharNext, &self.buffer); true
+         }
+         keymap::Key::Sym{sym: keymap::KeySym::Up, mods:_}    => {
+           view.move_caret(view::CaretMovement::LineUp, &self.buffer); true
+         }
+         keymap::Key::Sym{sym: keymap::KeySym::Down, mods:_}  => {
+           view.move_caret(view::CaretMovement::LineDown, &self.buffer); true
+         }
+         _                                                    => false,
+       };
+       self.windows.insert(self.focus.clone(), view);
+       swallowed }).
+     expect("Found no view for focused window.")
   }
 }
 
@@ -148,69 +174,78 @@ fn main() {
       { rim.draw_window(&win1, screen); rim.draw_window(&win2, screen); };
 
   loop {
-    match key_rx.try_recv() {
-      Ok(keymap::Key::Unicode{codepoint: 'h', mods:_}) => {
+    match key_rx.try_recv().ok().and_then(|key|
+        if !rim.handle_key_by_view(key) { Some(key) }
+        else { rim.draw_window(&rim.focus, &mut screen); None }) {
+      Some(keymap::Key::Unicode{codepoint: 'h', mods:_}) => {
         rim.switch_focus(frame::Direction::Left).
         map(|pair| draw_window_pair(pair, &rim, &mut screen));
       }
-      Ok(keymap::Key::Unicode{codepoint: 'l', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: 'l', mods:_}) => {
         rim.switch_focus(frame::Direction::Right).
         map(|pair| draw_window_pair(pair, &rim, &mut screen));
       }
-      Ok(keymap::Key::Unicode{codepoint: 'k', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: 'k', mods:_}) => {
         rim.switch_focus(frame::Direction::Up).
         map(|pair| draw_window_pair(pair, &rim, &mut screen));
       }
-      Ok(keymap::Key::Unicode{codepoint: 'j', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: 'j', mods:_}) => {
         rim.switch_focus(frame::Direction::Down).
         map(|pair| draw_window_pair(pair, &rim, &mut screen));
       }
-      Ok(keymap::Key::Unicode{codepoint: 'n', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: 'n', mods:_}) => {
         rim.shift_focus(frame::WindowOrder::NextWindow).
         map(|pair| draw_window_pair(pair, &rim, &mut screen));
       }
-      Ok(keymap::Key::Unicode{codepoint: 'N', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: 'N', mods:_}) => {
         rim.shift_focus(frame::WindowOrder::PreviousWindow).
         map(|pair| draw_window_pair(pair, &rim, &mut screen));
       }
-      Ok(keymap::Key::Unicode{codepoint: '=', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: '=', mods:_}) => {
         rim.frame.reset_layout();
+        rim.update_view_sizes();
         rim.draw_all(&mut screen);
       }
-      Ok(keymap::Key::Unicode{codepoint: 'v', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: 'v', mods:_}) => {
         rim.split_window(frame::Orientation::Vertical);
+        rim.update_view_sizes();
         rim.draw_all(&mut screen);
       }
-      Ok(keymap::Key::Unicode{codepoint: 's', mods:_}) => {
+      Some(keymap::Key::Unicode{codepoint: 's', mods:_}) => {
         rim.split_window(frame::Orientation::Horizontal);
+        rim.update_view_sizes();
         rim.draw_all(&mut screen);
       }
-      Ok(keymap::Key::Unicode{codepoint: 'y', mods})   => {
+      Some(keymap::Key::Unicode{codepoint: 'y', mods})   => {
         let amount = if mods.contains(keymap::MOD_CTRL) { -10 }
                      else                               { 10 };
         if rim.resize_window(frame::Orientation::Horizontal, amount) {
+          rim.update_view_sizes();
           rim.draw_all(&mut screen);
         }
       }
-      Ok(keymap::Key::Unicode{codepoint: 'u', mods})   => {
+      Some(keymap::Key::Unicode{codepoint: 'u', mods})   => {
         let amount = if mods.contains(keymap::MOD_CTRL) { -10 }
                      else                               { 10 };
         if rim.resize_window(frame::Orientation::Vertical, amount) {
+          rim.update_view_sizes();
           rim.draw_all(&mut screen);
         }
       }
-      Ok(keymap::Key::Unicode{codepoint: 'c', mods:_}) =>
+      Some(keymap::Key::Unicode{codepoint: 'c', mods:_}) =>
         if rim.close_window() {
+          rim.update_view_sizes();
           rim.draw_all(&mut screen);
         },
-      Ok(keymap::Key::Unicode{codepoint: 'q', mods:_}) =>
+      Some(keymap::Key::Unicode{codepoint: 'q', mods:_}) =>
         break,
-      _                                                =>
+      _                                                  =>
         (),
     }
 
     if screen.update_size() {
       rim.frame.set_size(screen.size());
+      rim.update_view_sizes();
       rim.draw_all(&mut screen);
     }
   }

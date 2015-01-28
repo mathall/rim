@@ -23,7 +23,7 @@ impl Size {
   }
 }
 
-#[derive(Copy)]
+#[derive(Copy, PartialEq)]
 pub struct Cell(pub u16, pub u16);
 
 #[cfg(not(test))]
