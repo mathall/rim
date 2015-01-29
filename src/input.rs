@@ -231,8 +231,8 @@ mod test {
 
   use super::libc;
   use std::sync::mpsc::{channel, Sender};
-  use std::io::pipe::PipeStream;
-  use std::io::timer;
+  use std::old_io::pipe::PipeStream;
+  use std::old_io::timer;
   use std::os;
   use std::thread::Thread;
   use std::time::duration::Duration;

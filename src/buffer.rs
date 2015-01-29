@@ -7,7 +7,7 @@
  */
 
 use std::cmp;
-use std::io::{File, IoError, IoResult};
+use std::old_io::{File, IoError, IoResult};
 use std::mem;
 use std::num::SignedInt;
 use std::ptr;
@@ -585,7 +585,7 @@ impl Iterator for PageStream {
   type Item = Page;
 
   fn next(&mut self) -> Option<Page> {
-    use std::io::{EndOfFile, SeekCur};
+    use std::old_io::{EndOfFile, SeekCur};
     let mut data = Box::new([0; PAGE_SIZE]);
     let result = self.file.read(data.as_mut_slice()).
       map(|bytes| PageStream::raw_data_to_utf8_string(&(*data)[0..bytes])).
@@ -629,14 +629,14 @@ impl Buffer {
   }
 
   pub fn write_to(&self, path: &Path) -> IoResult<()> {
-    use std::io::{Truncate, Write};
+    use std::old_io::{Truncate, Write};
     File::open_mode(path, Truncate, Write).and_then(|mut file| self.tree.iter().
       map(|page| file.write(page.data.as_bytes().as_slice())).
       fold(Ok(()), |ok, err| if ok.is_ok() && err.is_err() { err } else { ok }))
   }
 
   fn no_path_error() -> IoError {
-    use std::io::OtherIoError;
+    use std::old_io::OtherIoError;
     IoError { kind: OtherIoError, desc: "no path specified", detail: None }
   }
 
@@ -687,7 +687,7 @@ impl Buffer {
 
 #[cfg(test)]
 mod test {
-  use std::io::{File, IoResult};
+  use std::old_io::{File, IoResult};
   use std::num::SignedInt;
 
   // Opens a buffer (new or loaded file), performs some operation on it,
