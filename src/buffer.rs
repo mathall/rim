@@ -631,7 +631,7 @@ impl Buffer {
   pub fn write_to(&self, path: &Path) -> IoResult<()> {
     use std::old_io::{Truncate, Write};
     File::open_mode(path, Truncate, Write).and_then(|mut file| self.tree.iter().
-      map(|page| file.write(page.data.as_bytes().as_slice())).
+      map(|page| file.write_all(page.data.as_bytes().as_slice())).
       fold(Ok(()), |ok, err| if ok.is_ok() && err.is_err() { err } else { ok }))
   }
 
