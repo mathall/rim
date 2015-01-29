@@ -4,7 +4,7 @@ version = "0.0.1"
 dependencies = [
  "bitflags 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "termkey 0.17.5 (git+git://github.com/mathall/termkey-rs.git)",
- "time 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
+ "time 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -15,7 +15,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "gcc"
-version = "0.1.6"
+version = "0.1.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
@@ -25,23 +25,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "rustc-serialize"
-version = "0.2.9"
+version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "termkey"
 version = "0.17.5"
-source = "git+git://github.com/mathall/termkey-rs.git#b4853f05d37148f4e86e988356b39f7f9c7a86d2"
+source = "git+git://github.com/mathall/termkey-rs.git#4410c1f414af329e834b29004f7b76a81dc28e60"
 dependencies = [
  "bitflags 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
 name = "time"
-version = "0.1.14"
+version = "0.1.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "gcc 0.1.6 (registry+https://github.com/rust-lang/crates.io-index)",
+ "gcc 0.1.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -50,6 +50,6 @@ name = "uuid"
 version = "0.1.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 dependencies = [
- "rustc-serialize 0.2.9 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rustc-serialize 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
