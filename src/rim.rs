@@ -6,10 +6,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#![allow(unstable)]
-
+#![feature(collections)]
+#![feature(core)]
+#![feature(hash)]
 #![feature(int_uint)]
+#![feature(io)]
+#![feature(libc)]
+#![feature(path)]
+#![feature(rustc_private)]
 #![feature(slicing_syntax)]
+#![feature(std_misc)]
+#![feature(unicode)]
+
+#![cfg_attr(test, feature(os))]
 
 #[macro_use]
 extern crate bitflags;
