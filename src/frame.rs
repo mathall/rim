@@ -28,7 +28,7 @@ const BORDER_SIZE: u16 = 1;
  * representing sections of a frame. As such, Frame uses SectionPath as an
  * internal id for its sections.
  */
-#[derive(Clone, Eq, Hash, PartialEq, Show)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
 struct SectionPath(RingBuf<SectionSide>);
 
 impl SectionPath {
@@ -89,7 +89,7 @@ impl SectionPath {
 /*
  * Represents the sides of a section split.
  */
-#[derive(Clone, Copy, Eq, Hash, PartialEq, Show)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 enum SectionSide {
   Fst, // Top / Left
   Snd,  // Bottom / Right
@@ -584,7 +584,7 @@ impl<'l> Iterator for LeafSectionIterator<'l> {
 /*
  * The various errors that may result from usage of the frame.
  */
-#[derive(Copy, PartialEq, Show)]
+#[derive(Copy, Debug, PartialEq)]
 pub enum FrameError {
   NoSuchWindow,
   CantCloseLastWindow,
