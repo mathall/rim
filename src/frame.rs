@@ -28,7 +28,8 @@ const BORDER_SIZE: u16 = 1;
  * representing sections of a frame. As such, Frame uses SectionPath as an
  * internal id for its sections.
  */
-#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Hash, PartialEq)]
+#[cfg_attr(test, derive(Debug, Eq))]
 struct SectionPath(RingBuf<SectionSide>);
 
 impl SectionPath {
@@ -89,7 +90,8 @@ impl SectionPath {
 /*
  * Represents the sides of a section split.
  */
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Hash, PartialEq)]
+#[cfg_attr(test, derive(Debug, Eq))]
 enum SectionSide {
   Fst, // Top / Left
   Snd,  // Bottom / Right
