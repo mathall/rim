@@ -143,8 +143,7 @@ impl View {
     let screen::Size(rows, cols) = self.size;
     // draw line by line
     let mut row: u16 = 0;
-    for mut chars in
-        buffer.line_iter().skip(self.scroll_line).take(rows as uint) {
+    for chars in buffer.line_iter().skip(self.scroll_line).take(rows as uint) {
       let line_offset = screen::Cell(row, 0) + position;
       // draw character by character
       let mut col = -(self.scroll_column as int);

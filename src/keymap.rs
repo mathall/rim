@@ -13,14 +13,16 @@
  *   - Unicode codepoint such as a, ä, or あ
  * The key also records key modifier information.
  */
-#[derive(Copy, PartialEq, Show)]
+#[derive(Copy, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
 pub enum Key {
   Fn{num: int, mods: KeyMod},
   Sym{sym: KeySym, mods: KeyMod},
   Unicode{codepoint: char, mods: KeyMod},
 }
 
-#[derive(Copy, PartialEq, Show)]
+#[derive(Copy, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
 pub enum KeySym
 {
   Unknown = -1,
@@ -100,7 +102,7 @@ pub enum KeySym
 }
 
 bitflags! {
-  #[derive(Show)]
+  #[cfg_attr(test, derive(Debug))]
   flags KeyMod: u8 {
     const MOD_NONE  = 0,
     const MOD_SHIFT = 1 << 0,

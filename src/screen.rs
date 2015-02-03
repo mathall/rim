@@ -13,7 +13,7 @@ use std::cmp;
 use std::iter;
 use std::ops::{Add, Sub};
 
-#[derive(Copy, PartialEq, Show)]
+#[derive(Copy, Debug, PartialEq)]
 pub struct Size(pub u16, pub u16);
 
 #[cfg(not(test))]

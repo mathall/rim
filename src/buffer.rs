@@ -88,7 +88,7 @@ impl PageTree {
 
   fn build(mut stream: PageStream) -> IoResult<PageTree> {
     let mut tree = PageTree::new();
-    for page in stream { tree.append_page(page); }
+    for page in stream.by_ref() { tree.append_page(page); }
     return stream.error.map_or(Ok(tree), |err| Err(err));
   }
 
@@ -902,7 +902,7 @@ mod test {
     let path = Path::new("tests/buffer/long_string_insert.txt");
     let buffer = super::Buffer::open(&path).unwrap();
     let mut line = 0;
-    for mut chars in buffer.line_iter() {
+    for chars in buffer.line_iter() {
       assert_eq!(buffer.line_length(line), Some(chars.count() - 1));
       line += 1;
     }
@@ -914,7 +914,7 @@ mod test {
     let path = Path::new("tests/buffer/lacking_newline.txt");
     let buffer = super::Buffer::open(&path).unwrap();
     let mut offset = 0;
-    for mut chars in buffer.line_iter() {
+    for chars in buffer.line_iter() {
       for character in chars {
         assert_eq!(buffer.tree.get_char_by_offset(offset), Some(character));
         offset += 1;
