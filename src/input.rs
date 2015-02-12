@@ -47,7 +47,7 @@ pub fn start(key_tx: Sender<keymap::Key>) -> TermInput {
 pub fn start_on_fd(fd: libc::c_int, key_tx: Sender<keymap::Key>) -> TermInput {
   let (kill_tx, kill_rx) = channel();
   let (died_tx, died_rx) = channel();
-  Thread::spawn(move |:| { input_loop(kill_rx, died_tx, key_tx, fd); });
+  Thread::spawn(move || { input_loop(kill_rx, died_tx, key_tx, fd); });
   TermInput { kill_tx: kill_tx, died_rx: died_rx }
 }
 
