@@ -14,7 +14,6 @@
 #![feature(libc)]
 #![feature(path)]
 #![feature(rustc_private)]
-#![feature(slicing_syntax)]
 #![feature(std_misc)]
 #![feature(unicode)]
 
