@@ -10,7 +10,7 @@ extern crate libc;
 extern crate termkey;
 
 use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
-use std::thread::Thread;
+use std::thread;
 
 use self::termkey::{TermKeyEvent, TermKeyResult};
 use self::termkey::c::TermKeySym;
@@ -47,7 +47,7 @@ pub fn start(key_tx: Sender<keymap::Key>) -> TermInput {
 pub fn start_on_fd(fd: libc::c_int, key_tx: Sender<keymap::Key>) -> TermInput {
   let (kill_tx, kill_rx) = channel();
   let (died_tx, died_rx) = channel();
-  Thread::spawn(move || { input_loop(kill_rx, died_tx, key_tx, fd); });
+  thread::spawn(move || { input_loop(kill_rx, died_tx, key_tx, fd); });
   TermInput { kill_tx: kill_tx, died_rx: died_rx }
 }
 
@@ -234,7 +234,7 @@ mod test {
   use std::old_io::pipe::PipeStream;
   use std::old_io::timer;
   use std::os;
-  use std::thread::Thread;
+  use std::thread;
   use std::time::duration::Duration;
 
   use keymap;
@@ -288,7 +288,7 @@ mod test {
       PipeKiller { close_writer_tx: close_writer_tx, reader: reader };
 
     // simulate keyboard input
-    Thread::spawn(move || {
+    thread::spawn(move || {
       let mut pipe_out = PipeStream::open(writer);
       for input in inputs.iter() {
         pipe_out.write_all(input.as_slice()).unwrap();
