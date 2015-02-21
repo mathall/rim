@@ -7,6 +7,8 @@
  */
 
 use std::cmp;
+use std::error;
+use std::fmt;
 use std::old_io::{File, IoError, IoResult};
 use std::mem;
 use std::num::SignedInt;
@@ -604,6 +606,32 @@ impl Iterator for PageStream {
 }
 
 /*
+ * The various errors that may result from usage of the buffer.
+ */
+#[derive(Debug)]
+pub enum BufferError {
+  IoError(IoError),
+  NoPath,
+}
+
+impl fmt::Display for BufferError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "{:?}", *self)
+  }
+}
+
+impl error::Error for BufferError {
+  fn description(&self) -> &str {
+    match *self {
+      BufferError::IoError(ref err) => err.description(),
+      BufferError::NoPath           => "The buffer had no path.",
+    }
+  }
+}
+
+type BufferResult<T> = Result<T, BufferError>;
+
+/*
  * The buffer is used to open, modify and write files back to disk.
  */
 pub struct Buffer {
@@ -618,26 +646,27 @@ impl Buffer {
     return buffer;
   }
 
-  pub fn open(path: &Path) -> IoResult<Buffer> {
-    PageStream::new(path).and_then(PageTree::build).and_then(
-      |tree| Ok(Buffer { path: Some(path.clone()), tree: tree }))
+  pub fn open(path: &Path) -> BufferResult<Buffer> {
+    PageStream::new(path).
+    and_then(PageTree::build).
+    and_then(|tree| Ok(Buffer { path: Some(path.clone()), tree: tree })).
+    map_err(|io_err| BufferError::IoError(io_err))
   }
 
-  pub fn write(&self) -> IoResult<()> {
-    self.path.as_ref().map_or(
-      Err(Buffer::no_path_error()), |path| self.write_to(path))
+  pub fn write(&self) -> BufferResult<()> {
+    self.path.as_ref().
+    map_or(Err(BufferError::NoPath), |path| self.write_to(path))
   }
 
-  pub fn write_to(&self, path: &Path) -> IoResult<()> {
+  pub fn write_to(&self, path: &Path) -> BufferResult<()> {
     use std::old_io::{Truncate, Write};
-    File::open_mode(path, Truncate, Write).and_then(|mut file| self.tree.iter().
+    File::open_mode(path, Truncate, Write).
+    and_then(|mut file|
+      self.tree.iter().
       map(|page| file.write_all(page.data.as_bytes().as_slice())).
-      fold(Ok(()), |ok, err| if ok.is_ok() && err.is_err() { err } else { ok }))
-  }
-
-  fn no_path_error() -> IoError {
-    use std::old_io::OtherIoError;
-    IoError { kind: OtherIoError, desc: "no path specified", detail: None }
+      fold(Ok(()),
+        |ok, err| if ok.is_ok() && err.is_err() { err } else { ok })).
+    map_err(|io_err| BufferError::IoError(io_err))
   }
 
   pub fn insert_at_offset(&mut self, string: String, mut offset: uint) {
@@ -695,7 +724,8 @@ mod test {
   // Also throws in a balance check on the resulting page tree, because why not.
   fn buffer_test<O, M: ?Sized>(test: &String, operation: O, make_buffer: Box<M>)
       where O: Fn(&mut super::Buffer) -> (),
-            M: Fn() -> IoResult<super::Buffer> {
+            M: Fn() -> super::BufferResult<super::Buffer> {
+    use std::error::Error;
     let result_path = Path::new(format!("tests/buffer/{}-result.txt", test));
     let expect_path = Path::new(format!("tests/buffer/{}-expect.txt", test));
 
@@ -712,7 +742,7 @@ mod test {
 
     match (result_content, result, expect_content) {
       (Err(err),   _,        _         ) => panic!(err.desc),
-      (_,          Err(err), _         ) => panic!(err.desc),
+      (_,          Err(err), _         ) => panic!("{}", err.description()),
       (_,          _,        Err(err)  ) => panic!(err.desc),
       (Ok(result), Ok(_),    Ok(expect)) => assert_eq!(result, expect),
     };
@@ -728,7 +758,7 @@ mod test {
       #[test]
       fn $name() {
         let test = String::from_str(stringify!($name));
-        let buffer_maker: Box<Fn() -> IoResult<super::Buffer>> =
+        let buffer_maker: Box<Fn() -> super::BufferResult<super::Buffer>> =
           if $new_file { Box::new(|&:| Ok(super::Buffer::new())) }
           else { Box::new(|&:| {
             let test_path = Path::new(format!("tests/buffer/{}.txt", &test));
