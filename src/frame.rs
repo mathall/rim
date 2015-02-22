@@ -1054,8 +1054,8 @@ mod test {
   // Starting with one window and assigning it the number 0 then splitting
   // sequentially and assigning each new window the next number results in the
   // frames and section trees depicted along with the split descriptors below.
-  const SPLIT_DESCRIPTORS: &'static [&'static  [(uint, super::Orientation)]] =
-    &[
+  const SPLIT_DESCRIPTORS: [&'static  [(uint, super::Orientation)]; 3] =
+    [
       // -----------------                     V
       // |     0     |   |                    / \
       // |-----------|   |                   H   1
