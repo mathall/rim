@@ -199,6 +199,8 @@ fn screen_to_buffer_column(row: uint, screen_column: uint,
 
 #[cfg(test)]
 mod test {
+  use std::path::Path;
+
   use buffer;
   use screen;
 

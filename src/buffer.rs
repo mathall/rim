@@ -7,9 +7,14 @@
  */
 
 use std::cmp;
-use std::old_io::{File, IoError, IoResult};
+use std::error;
+use std::fmt;
+use std::fs::File;
+use std::io;
+use std::io::{Seek, Read, Write};
 use std::mem;
 use std::num::SignedInt;
+use std::path::{Path, PathBuf};
 use std::ptr;
 
 use self::PageTreeNode::*;
@@ -86,7 +91,7 @@ impl PageTree {
     PageTree { left: Nil, right: Nil, length: 0, newlines: 0, height: 1 }
   }
 
-  fn build(mut stream: PageStream) -> IoResult<PageTree> {
+  fn build(mut stream: PageStream) -> io::Result<PageTree> {
     let mut tree = PageTree::new();
     for page in stream.by_ref() { tree.append_page(page); }
     return stream.error.map_or(Ok(tree), |err| Err(err));
@@ -557,11 +562,11 @@ impl Iterator for StringChunkerator {
  */
 struct PageStream {
   file: File,
-  error: Option<IoError>,
+  error: Option<io::Error>,
 }
 
 impl PageStream {
-  fn new(path: &Path) -> IoResult<PageStream> {
+  fn new(path: &Path) -> io::Result<PageStream> {
     File::open(path).and_then(|f| Ok(PageStream { file: f, error: None }))
   }
 
@@ -585,29 +590,50 @@ impl Iterator for PageStream {
   type Item = Page;
 
   fn next(&mut self) -> Option<Page> {
-    use std::old_io::{EndOfFile, SeekCur};
+    use std::io::SeekFrom;
     let mut data = Box::new([0; PAGE_SIZE]);
-    let result = self.file.read(data.as_mut_slice()).
-      map(|bytes| PageStream::raw_data_to_utf8_string(&(*data)[0..bytes])).
-      and_then(|(string, num_truncated_bytes)| {
-        try!(self.file.seek(-(num_truncated_bytes as i64), SeekCur));
-        Ok(Page::new(string)) });
-
-    match result {
-      Ok(page) => return Some(page),
-      Err(err) => {
-        self.error = if err.kind == EndOfFile { None } else { Some(err) };
-        return None;
-      }
-    };
+    self.file.read(data.as_mut_slice()).
+    and_then(|bytes| if bytes == 0 { Ok(None) } else {
+      let (string, num_truncated_bytes) =
+        PageStream::raw_data_to_utf8_string(&(*data)[0..bytes]);
+      try!(self.file.seek(SeekFrom::Current(-(num_truncated_bytes as i64))));
+      Ok(Some(Page::new(string))) }).
+    map_err(|err| self.error = Some(err)).
+    ok().and_then(|result| result)
   }
 }
+
+/*
+ * The various errors that may result from usage of the buffer.
+ */
+#[derive(Debug)]
+pub enum BufferError {
+  IoError(io::Error),
+  NoPath,
+}
+
+impl fmt::Display for BufferError {
+  fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    write!(f, "{:?}", *self)
+  }
+}
+
+impl error::Error for BufferError {
+  fn description(&self) -> &str {
+    match *self {
+      BufferError::IoError(ref err) => err.description(),
+      BufferError::NoPath           => "The buffer had no path.",
+    }
+  }
+}
+
+type BufferResult<T> = Result<T, BufferError>;
 
 /*
  * The buffer is used to open, modify and write files back to disk.
  */
 pub struct Buffer {
-  path: Option<Path>,
+  path: Option<PathBuf>,
   tree: PageTree,
 }
 
@@ -618,26 +644,26 @@ impl Buffer {
     return buffer;
   }
 
-  pub fn open(path: &Path) -> IoResult<Buffer> {
-    PageStream::new(path).and_then(PageTree::build).and_then(
-      |tree| Ok(Buffer { path: Some(path.clone()), tree: tree }))
+  pub fn open(path: &Path) -> BufferResult<Buffer> {
+    PageStream::new(path).
+    and_then(PageTree::build).
+    and_then(|tree| Ok(Buffer { path: Some(path.to_path_buf()), tree: tree })).
+    map_err(|io_err| BufferError::IoError(io_err))
   }
 
-  pub fn write(&self) -> IoResult<()> {
-    self.path.as_ref().map_or(
-      Err(Buffer::no_path_error()), |path| self.write_to(path))
+  pub fn write(&self) -> BufferResult<()> {
+    self.path.as_ref().
+    map_or(Err(BufferError::NoPath), |path| self.write_to(path))
   }
 
-  pub fn write_to(&self, path: &Path) -> IoResult<()> {
-    use std::old_io::{Truncate, Write};
-    File::open_mode(path, Truncate, Write).and_then(|mut file| self.tree.iter().
+  pub fn write_to(&self, path: &Path) -> BufferResult<()> {
+    File::create(path).
+    and_then(|mut file|
+      self.tree.iter().
       map(|page| file.write_all(page.data.as_bytes().as_slice())).
-      fold(Ok(()), |ok, err| if ok.is_ok() && err.is_err() { err } else { ok }))
-  }
-
-  fn no_path_error() -> IoError {
-    use std::old_io::OtherIoError;
-    IoError { kind: OtherIoError, desc: "no path specified", detail: None }
+      fold(Ok(()),
+        |ok, err| if ok.is_ok() && err.is_err() { err } else { ok })).
+    map_err(|io_err| BufferError::IoError(io_err))
   }
 
   pub fn insert_at_offset(&mut self, string: String, mut offset: uint) {
@@ -687,33 +713,41 @@ impl Buffer {
 
 #[cfg(test)]
 mod test {
-  use std::old_io::{File, IoResult};
+  use std::fs::File;
+  use std::io;
   use std::num::SignedInt;
+  use std::path::Path;
 
   // Opens a buffer (new or loaded file), performs some operation on it,
   // dumps buffer content to disk, compares results to expectations.
   // Also throws in a balance check on the resulting page tree, because why not.
   fn buffer_test<O, M: ?Sized>(test: &String, operation: O, make_buffer: Box<M>)
       where O: Fn(&mut super::Buffer) -> (),
-            M: Fn() -> IoResult<super::Buffer> {
-    let result_path = Path::new(format!("tests/buffer/{}-result.txt", test));
-    let expect_path = Path::new(format!("tests/buffer/{}-expect.txt", test));
+            M: Fn() -> super::BufferResult<super::Buffer> {
+    use std::error::Error;
+    use std::io::Read;
+    let result_path_string = format!("tests/buffer/{}-result.txt", test);
+    let result_path = Path::new(result_path_string.as_slice());
+    let expect_path_string = format!("tests/buffer/{}-expect.txt", test);
+    let expect_path = Path::new(expect_path_string.as_slice());
 
     let result = make_buffer().
       map(|mut buffer| { operation(&mut buffer); buffer }).
       map(|buffer| { assert!(is_balanced(&buffer.tree)); buffer }).
       and_then(|buffer| buffer.write_to(&result_path));
 
-    let file_contents = |&: path| File::open(path).and_then(
-      |mut file| file.read_to_string());
+    let file_contents = |&: path| File::open(path).and_then(|mut file| {
+      let mut content = String::new();
+      try!(file.read_to_string(&mut content));
+      Ok(content) });
 
     let result_content = file_contents(&result_path);
     let expect_content = file_contents(&expect_path);
 
     match (result_content, result, expect_content) {
-      (Err(err),   _,        _         ) => panic!(err.desc),
-      (_,          Err(err), _         ) => panic!(err.desc),
-      (_,          _,        Err(err)  ) => panic!(err.desc),
+      (Err(err),   _,        _         ) => panic!("{}", err.description()),
+      (_,          Err(err), _         ) => panic!("{}", err.description()),
+      (_,          _,        Err(err)  ) => panic!("{}", err.description()),
       (Ok(result), Ok(_),    Ok(expect)) => assert_eq!(result, expect),
     };
   }
@@ -728,10 +762,11 @@ mod test {
       #[test]
       fn $name() {
         let test = String::from_str(stringify!($name));
-        let buffer_maker: Box<Fn() -> IoResult<super::Buffer>> =
+        let buffer_maker: Box<Fn() -> super::BufferResult<super::Buffer>> =
           if $new_file { Box::new(|&:| Ok(super::Buffer::new())) }
           else { Box::new(|&:| {
-            let test_path = Path::new(format!("tests/buffer/{}.txt", &test));
+            let test_path_string = format!("tests/buffer/{}.txt", &test);
+            let test_path = Path::new(test_path_string.as_slice());
             return super::Buffer::open(&test_path);
           }) };
         buffer_test(&test, $operation, buffer_maker);

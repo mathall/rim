@@ -9,7 +9,7 @@
 extern crate uuid;
 
 use std::cmp;
-use std::collections::{HashMap, ring_buf, RingBuf};
+use std::collections::{HashMap, vec_deque, VecDeque};
 use std::error;
 use std::fmt;
 use std::mem;
@@ -30,11 +30,11 @@ const BORDER_SIZE: u16 = 1;
  */
 #[derive(Clone, Hash, PartialEq)]
 #[cfg_attr(test, derive(Debug, Eq))]
-struct SectionPath(RingBuf<SectionSide>);
+struct SectionPath(VecDeque<SectionSide>);
 
 impl SectionPath {
   fn new() -> SectionPath {
-    SectionPath(RingBuf::new())
+    SectionPath(VecDeque::new())
   }
 
   fn len(&self) -> uint {
@@ -81,7 +81,7 @@ impl SectionPath {
     return self.common_base(other) == *self;
   }
 
-  fn iter(&self) -> ring_buf::Iter<SectionSide> {
+  fn iter(&self) -> vec_deque::Iter<SectionSide> {
     let &SectionPath(ref internals) = self;
     internals.iter()
   }
