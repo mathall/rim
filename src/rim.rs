@@ -8,7 +8,6 @@
 
 #![feature(collections)]
 #![feature(core)]
-#![feature(hash)]
 #![feature(fs)]
 #![feature(int_uint)]
 #![feature(io)]
