@@ -13,6 +13,7 @@
 #![feature(int_uint)]
 #![feature(io)]
 #![feature(libc)]
+#![feature(old_io)]
 #![feature(path)]
 #![feature(rustc_private)]
 #![feature(unicode)]
