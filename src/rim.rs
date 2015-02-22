@@ -9,21 +9,24 @@
 #![feature(collections)]
 #![feature(core)]
 #![feature(hash)]
+#![feature(fs)]
 #![feature(int_uint)]
 #![feature(io)]
 #![feature(libc)]
 #![feature(path)]
 #![feature(rustc_private)]
-#![feature(std_misc)]
 #![feature(unicode)]
 
 #![cfg_attr(test, feature(os))]
+#![cfg_attr(test, feature(std_misc))]
 
 #[macro_use]
 extern crate bitflags;
 
 #[cfg(not(test))]
 use std::collections::HashMap;
+#[cfg(not(test))]
+use std::path::Path;
 
 #[allow(dead_code, unused_imports)]  // temporary until buffer is used for real
 mod buffer;
