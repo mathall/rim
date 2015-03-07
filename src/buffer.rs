@@ -439,6 +439,11 @@ impl<'l> LineIterator<'l> {
   fn new(tree: &'l PageTree) -> LineIterator {
     LineIterator { tree: tree, next_line: 0 }
   }
+
+  pub fn from(mut self, line: uint) -> LineIterator<'l> {
+    self.next_line = line;
+    self
+  }
 }
 
 impl<'l> Iterator for LineIterator<'l> {
