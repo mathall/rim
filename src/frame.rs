@@ -811,9 +811,10 @@ impl Frame {
   pub fn get_adjacent_window(&self, ctx: &FrameContext, window: &WindowId,
                              direction: Direction) -> FrameResult<WindowId> {
     self.get_window_rect(ctx, window).
-    map(|rect| adjacent_window_point(rect, direction)).
-    and_then(|point|
-      self.main_section.get_section_at_point(screen::Cell(0, 0), point).
+    and_then(|rect|
+      adjacent_window_point(rect, direction).
+      and_then(|point|
+        self.main_section.get_section_at_point(screen::Cell(0, 0), point)).
       ok_or(FrameError::NoSuchAdjacentWindow)).
     map(|path| ctx.get_window(&path))
   }
@@ -928,13 +929,16 @@ impl Frame {
 }
 
 fn adjacent_window_point(rect: screen::Rect, direction: Direction)
-    -> screen::Cell {
+    -> Option<screen::Cell> {
   let screen::Rect(screen::Cell(row, col), screen::Size(rows, cols)) = rect;
+  let sub = BORDER_SIZE + 1;
   match direction {
-    Direction::Left  => screen::Cell(row, col - BORDER_SIZE - 1),
-    Direction::Right => screen::Cell(row, col + cols + BORDER_SIZE),
-    Direction::Up    => screen::Cell(row - BORDER_SIZE - 1, col),
-    Direction::Down  => screen::Cell(row + rows + BORDER_SIZE, col),
+    Direction::Left  => if col >= sub { Some(screen::Cell(row, col - sub)) }
+                        else          { None },
+    Direction::Right => Some(screen::Cell(row, col + cols + BORDER_SIZE)),
+    Direction::Up    => if row >= sub { Some(screen::Cell(row - sub, col)) }
+                        else          { None },
+    Direction::Down  => Some(screen::Cell(row + rows + BORDER_SIZE, col)),
   }
 }
 

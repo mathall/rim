@@ -402,7 +402,7 @@ impl<'l> CharIterator<'l> {
     let mut pages = PageTreeIterator::new(tree, start);
     let page = pages.next().unwrap();
     let mut chars = page.data.as_slice().chars();
-    for _ in range(0, start - pages.next_offset + page.length) {
+    for _ in range(0, (start + page.length) - pages.next_offset) {
       chars.next();
     }
     CharIterator {
