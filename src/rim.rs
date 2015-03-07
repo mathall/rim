@@ -181,7 +181,7 @@ fn main() {
   let _term_input = input::start(key_tx);
 
   let draw_window_pair =
-    |&: (win1, win2), rim: &Rim, screen: &mut screen::Screen|
+    |(win1, win2), rim: &Rim, screen: &mut screen::Screen|
       { rim.draw_window(&win1, screen); rim.draw_window(&win2, screen); };
 
   loop {

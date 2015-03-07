@@ -133,7 +133,7 @@ impl View {
     let caret_cell = position + screen::Cell(caret_row, caret_column as u16);
 
     // helper to put a character on the screen
-    let put = |&: character, cell: screen::Cell, screen: &mut screen::Screen| {
+    let put = |character, cell: screen::Cell, screen: &mut screen::Screen| {
       use screen::Color::*;
       let (fg, bg) = if focused && cell != caret_cell { (Black, White) }
                      else                             { (White, Black) };
@@ -143,7 +143,7 @@ impl View {
     let screen::Size(rows, cols) = self.size;
     // draw line by line
     let mut row: u16 = 0;
-    for chars in buffer.line_iter().skip(self.scroll_line).take(rows as uint) {
+    for chars in buffer.line_iter().from(self.scroll_line).take(rows as uint) {
       let line_offset = screen::Cell(row, 0) + position;
       // draw character by character
       let mut col = -(self.scroll_column as int);
@@ -182,7 +182,7 @@ impl View {
 // sums up the widths of the characters before the given buffer column
 fn buffer_to_screen_column(line: uint, column: uint, buffer: &buffer::Buffer)
     -> uint {
-  buffer.line_iter().skip(line).next().map(|chars|
+  buffer.line_iter().from(line).next().map(|chars|
     chars.take(column).map(|c| CharExt::width(c, false).unwrap_or(0)).sum()).
   unwrap_or(0)
 }
@@ -190,7 +190,7 @@ fn buffer_to_screen_column(line: uint, column: uint, buffer: &buffer::Buffer)
 // scans a line, counting characters up to the given screen column
 fn screen_to_buffer_column(row: uint, screen_column: uint,
     buffer: &buffer::Buffer) -> Option<uint> {
-  buffer.line_iter().skip(row).next().map(|chars|
+  buffer.line_iter().from(row).next().map(|chars|
     chars.filter(|&c| c != '\n').scan(0, |sum, c| {
       *sum += CharExt::width(c, false).unwrap_or(0);
       Some(*sum) }).

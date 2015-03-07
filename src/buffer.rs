@@ -402,7 +402,7 @@ impl<'l> CharIterator<'l> {
     let mut pages = PageTreeIterator::new(tree, start);
     let page = pages.next().unwrap();
     let mut chars = page.data.as_slice().chars();
-    for _ in range(0, start - pages.next_offset + page.length) {
+    for _ in range(0, (start + page.length) - pages.next_offset) {
       chars.next();
     }
     CharIterator {
@@ -438,6 +438,11 @@ struct LineIterator<'l> {
 impl<'l> LineIterator<'l> {
   fn new(tree: &'l PageTree) -> LineIterator {
     LineIterator { tree: tree, next_line: 0 }
+  }
+
+  pub fn from(mut self, line: uint) -> LineIterator<'l> {
+    self.next_line = line;
+    self
   }
 }
 
@@ -736,7 +741,7 @@ mod test {
       map(|buffer| { assert!(is_balanced(&buffer.tree)); buffer }).
       and_then(|buffer| buffer.write_to(&result_path));
 
-    let file_contents = |&: path| File::open(path).and_then(|mut file| {
+    let file_contents = |path| File::open(path).and_then(|mut file| {
       let mut content = String::new();
       try!(file.read_to_string(&mut content));
       Ok(content) });
@@ -763,8 +768,8 @@ mod test {
       fn $name() {
         let test = String::from_str(stringify!($name));
         let buffer_maker: Box<Fn() -> super::BufferResult<super::Buffer>> =
-          if $new_file { Box::new(|&:| Ok(super::Buffer::new())) }
-          else { Box::new(|&:| {
+          if $new_file { Box::new(|| Ok(super::Buffer::new())) }
+          else { Box::new(|| {
             let test_path_string = format!("tests/buffer/{}.txt", &test);
             let test_path = Path::new(test_path_string.as_slice());
             return super::Buffer::open(&test_path);
@@ -823,7 +828,7 @@ mod test {
   balance_test!(balanced_insert_9001, 9001u);
 
   fn is_balanced(tree: &super::PageTree) -> bool {
-    let branch_is_balanced = |&: branch: &super::PageTreeNode| {
+    let branch_is_balanced = |branch: &super::PageTreeNode| {
       match branch {
         &super::PageTreeNode::Tree(ref tree) => is_balanced(&**tree),
         _                                    => true,
