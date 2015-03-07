@@ -133,7 +133,7 @@ impl View {
     let caret_cell = position + screen::Cell(caret_row, caret_column as u16);
 
     // helper to put a character on the screen
-    let put = |&: character, cell: screen::Cell, screen: &mut screen::Screen| {
+    let put = |character, cell: screen::Cell, screen: &mut screen::Screen| {
       use screen::Color::*;
       let (fg, bg) = if focused && cell != caret_cell { (Black, White) }
                      else                             { (White, Black) };

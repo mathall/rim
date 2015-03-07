@@ -90,7 +90,7 @@ mod libc_poll {
 
 fn input_loop(kill_rx: Receiver<()>, died_tx: Sender<()>,
               key_tx: Sender<keymap::Key>, fd: libc::c_int) {
-  let is_alive = |&:| kill_rx.try_recv() == Err(TryRecvError::Empty);
+  let is_alive = || kill_rx.try_recv() == Err(TryRecvError::Empty);
   let mut tk = termkey::TermKey::new(fd, termkey::c::TERMKEY_FLAG_CTRLC);
 
   while is_alive() {

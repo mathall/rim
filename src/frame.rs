@@ -1570,7 +1570,7 @@ mod test {
                           adjacencies: &[(uint, Option<uint>, Option<uint>,
                                           Option<uint>, Option<uint>)]) {
     let err = super::FrameError::NoSuchAdjacentWindow;
-    let expectation_as_frame_result = |&: opt: Option<uint>|
+    let expectation_as_frame_result = |opt: Option<uint>|
       opt.map(|adj| windows[adj].clone()).ok_or(err);
     for &(win, left, right, up, down) in adjacencies.iter() {
       assert_eq!(expectation_as_frame_result(left),
