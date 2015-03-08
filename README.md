@@ -10,16 +10,19 @@ Simply clone and `cargo run`.
 
 Note: All key bindings are for testing purposes only.
 - `q` - Quit
-- `Arrow keys` - Move caret
-- `v/s` - Split focused window
-- `c` - Close focused window
-- `h/j/k/l` - Move window focus left/down/up/right
+- `h/j/k/l/Arrow keys` - Move caret
+- `<C-w>v/<C-w>s` - Split focused window
+- `<C-w>c` - Close focused window
+- `<C-w> h/j/k/l` - Move window focus left/down/up/right
 - `n/N` - Move window focus forward/backward in window order
-- `(Ctrl)+y/u` - Resize focused window
-- `=` - Reset window sizes
+- `(<C->) y/u` - Resize focused window
+- `<C-w>=` - Reset window sizes
+- `i` - Enter insert mode
+- `Escape` - Exit insert mode
+- `Arrow keys` in insert mode - Move window focus (exits insert mode)
 
 ## What's next?
-Keychaining probably. Maybe some of those buffer operations after that.
+Maybe some of those buffer operations. Insert mode is confusing without them.
 
 ## Trouble shooting
 Rustc updates are still a bit of a pain point. If things are not compiling, you're probably using a different version than I. I try to update at least once a week.
