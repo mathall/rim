@@ -15,10 +15,10 @@
 #![feature(old_io)]
 #![feature(path)]
 #![feature(rustc_private)]
+#![feature(std_misc)]
 #![feature(unicode)]
 
 #![cfg_attr(test, feature(os))]
-#![cfg_attr(test, feature(std_misc))]
 
 #[macro_use]
 extern crate bitflags;
@@ -30,6 +30,7 @@ use std::path::Path;
 
 #[allow(dead_code, unused_imports)]  // temporary until buffer is used for real
 mod buffer;
+mod command;
 mod frame;
 mod input;
 mod keymap;
@@ -41,6 +42,7 @@ struct Window {
   view: view::View,
   rect: screen::Rect,
   needs_redraw: bool,
+  normal_keychain: command::Keychain,
 }
 
 #[cfg(not(test))]
@@ -50,6 +52,7 @@ impl Window {
       view: view::View::new(),
       rect: screen::Rect(screen::Cell(0, 0), screen::Size(0, 0)),
       needs_redraw: true,
+      normal_keychain: default_normal_keychain(),
     }
   }
 }
@@ -62,14 +65,21 @@ struct Rim {
   windows: HashMap<frame::WindowId, Window>,
   focus: frame::WindowId,
   buffer: buffer::Buffer,
+  cmd_thread: command::CmdThread,
+  quit: bool,
 }
 
 #[cfg(not(test))]
 impl Rim {
-  fn new() -> Rim {
+  fn new(cmd_thread: command::CmdThread) -> Rim {
     let (frame, frame_ctx, first_win_id) = frame::Frame::new();
     let mut windows = HashMap::new();
-    windows.insert(first_win_id.clone(), Window::new());
+    let first_win = Window::new();
+    cmd_thread.set_keychain(default_keychain(), 0).ok().expect(
+      "Command thread died.");
+    cmd_thread.set_keychain(first_win.normal_keychain.clone(), 1).ok().expect(
+      "Command thread died.");
+    windows.insert(first_win_id.clone(), first_win);
     Rim {
       frame: frame,
       frame_ctx: frame_ctx,
@@ -77,6 +87,8 @@ impl Rim {
       windows: windows,
       focus: first_win_id,
       buffer: buffer::Buffer::open(&Path::new("src/rim.rs")).unwrap(),
+      cmd_thread: cmd_thread,
+      quit: false,
     }
   }
 
@@ -91,6 +103,10 @@ impl Rim {
   }
 
   fn set_focus(&mut self, win_id: frame::WindowId) {
+    assert!(self.windows.contains_key(&win_id));
+    self.windows.get(&win_id).map(|win|
+      self.cmd_thread.set_keychain(win.normal_keychain.clone(), 1).ok().expect(
+        "Command thread died."));
     self.windows.get_mut(&win_id).map(|win| win.needs_redraw = true);
     self.windows.get_mut(&self.focus).map(|win| win.needs_redraw = true);
     self.focus = win_id;
@@ -153,32 +169,44 @@ impl Rim {
     self.frame_needs_redraw = true;
   }
 
-  fn handle_key_by_window(&mut self, key: keymap::Key) -> bool {
-     self.windows.remove(&self.focus).
-     map(|mut win| {
-       let swallowed = match key {
-         keymap::Key::Sym{sym: keymap::KeySym::Left, mods:_}  => {
-           win.view.move_caret(view::CaretMovement::CharPrev, &self.buffer);
-           true
-         }
-         keymap::Key::Sym{sym: keymap::KeySym::Right, mods:_} => {
-           win.view.move_caret(view::CaretMovement::CharNext, &self.buffer);
-           true
-         }
-         keymap::Key::Sym{sym: keymap::KeySym::Up, mods:_}    => {
-           win.view.move_caret(view::CaretMovement::LineUp, &self.buffer);
-           true
-         }
-         keymap::Key::Sym{sym: keymap::KeySym::Down, mods:_}  => {
-           win.view.move_caret(view::CaretMovement::LineDown, &self.buffer);
-           true
-         }
-         _                                                    => false,
-       };
-       if swallowed { win.needs_redraw = true; }
-       self.windows.insert(self.focus.clone(), win);
-       swallowed }).
-     expect("Couldn't find focused window.")
+  fn handle_cmd(&mut self, cmd: command::Cmd) {
+    match cmd {
+      command::Cmd::MoveFocus(direction)      =>
+        self.move_focus(direction),
+      command::Cmd::ShiftFocus(window_order)  =>
+        self.shift_focus(window_order),
+      command::Cmd::ResetLayout               => {
+        self.frame.reset_layout();
+        self.invalidate_frame();
+      }
+      command::Cmd::SplitWindow(orientation)  =>
+        self.split_window(orientation),
+      command::Cmd::GrowWindow(orientation)   =>
+        self.resize_window(orientation, 10),
+      command::Cmd::ShrinkWindow(orientation) =>
+        self.resize_window(orientation, -10),
+      command::Cmd::CloseWindow               =>
+        self.close_window(),
+      command::Cmd::Quit                      =>
+        { self.quit = true; }
+      command::Cmd::WinCmd(cmd)               => {
+        self.windows.remove(&self.focus).
+        map(|mut win| {
+          self.handle_win_cmd(cmd, &mut win);
+          self.windows.insert(self.focus.clone(), win); }).
+        expect("Couldn't find focused window.");
+      }
+    }
+    self.cmd_thread.ack_cmd().ok().expect("Command thread died.");
+  }
+
+  fn handle_win_cmd(&mut self, cmd: command::WinCmd, win: &mut Window) {
+    match cmd {
+      command::WinCmd::MoveCaret(movement) => {
+        win.view.move_caret(movement, &self.buffer);
+        win.needs_redraw = true;
+      }
+    }
   }
 }
 
@@ -193,51 +221,23 @@ impl Drop for Rim {
 fn main() {
   let mut screen = screen::Screen::setup().unwrap();
 
-  let mut rim = Rim::new();
-
   let (key_tx, key_rx) = std::sync::mpsc::channel();
   let _term_input = input::start(key_tx);
 
+  let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+  let cmd_thread = command::start(cmd_tx);
+
+  let mut rim = Rim::new(cmd_thread);
+
+  rim.cmd_thread.set_key_rx(key_rx).ok().expect("Command thread died.");
+
   loop {
-    match key_rx.try_recv().ok().and_then(|key|
-        if rim.handle_key_by_window(key) { None } else { Some(key) }) {
-      Some(keymap::Key::Unicode{codepoint: 'h', mods:_}) =>
-        rim.move_focus(frame::Direction::Left),
-      Some(keymap::Key::Unicode{codepoint: 'l', mods:_}) =>
-        rim.move_focus(frame::Direction::Right),
-      Some(keymap::Key::Unicode{codepoint: 'k', mods:_}) =>
-        rim.move_focus(frame::Direction::Up),
-      Some(keymap::Key::Unicode{codepoint: 'j', mods:_}) =>
-        rim.move_focus(frame::Direction::Down),
-      Some(keymap::Key::Unicode{codepoint: 'n', mods:_}) =>
-        rim.shift_focus(frame::WindowOrder::NextWindow),
-      Some(keymap::Key::Unicode{codepoint: 'N', mods:_}) =>
-        rim.shift_focus(frame::WindowOrder::PreviousWindow),
-      Some(keymap::Key::Unicode{codepoint: '=', mods:_}) => {
-        rim.frame.reset_layout();
-        rim.invalidate_frame();
-      }
-      Some(keymap::Key::Unicode{codepoint: 'v', mods:_}) =>
-        rim.split_window(frame::Orientation::Vertical),
-      Some(keymap::Key::Unicode{codepoint: 's', mods:_}) =>
-        rim.split_window(frame::Orientation::Horizontal),
-      Some(keymap::Key::Unicode{codepoint: 'y', mods})   => {
-        let amount = if mods.contains(keymap::MOD_CTRL) { -10 }
-                     else                               { 10 };
-        rim.resize_window(frame::Orientation::Horizontal, amount);
-      }
-      Some(keymap::Key::Unicode{codepoint: 'u', mods})   => {
-        let amount = if mods.contains(keymap::MOD_CTRL) { -10 }
-                     else                               { 10 };
-        rim.resize_window(frame::Orientation::Vertical, amount);
-      }
-      Some(keymap::Key::Unicode{codepoint: 'c', mods:_}) =>
-        rim.close_window(),
-      Some(keymap::Key::Unicode{codepoint: 'q', mods:_}) =>
-        break,
-      _                                                  =>
-        (),
+    if cmd_rx.try_recv().map(|cmd| rim.handle_cmd(cmd)) ==
+        Err(std::sync::mpsc::TryRecvError::Disconnected) {
+      panic!("Command receiver died.");
     }
+
+    if rim.quit { break }
 
     // clear/redraw/update/invalidate everything if the screen size changed
     if screen.update_size() {
@@ -269,4 +269,74 @@ fn main() {
     // flush screen if we did any drawing
     if flush_screen { screen.flush(); }
   }
+}
+
+#[cfg(not(test))]
+fn default_keychain() -> command::Keychain {
+  use keymap::Key;
+  use command::Cmd;
+  let mut chain = command::Keychain::new();
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
+    Cmd::MoveFocus(frame::Direction::Left));
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
+    Cmd::MoveFocus(frame::Direction::Right));
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
+    Cmd::MoveFocus(frame::Direction::Up));
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
+    Cmd::MoveFocus(frame::Direction::Down));
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: 'v', mods: keymap::MOD_NONE}],
+    Cmd::SplitWindow(frame::Orientation::Vertical));
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: 's', mods: keymap::MOD_NONE}],
+    Cmd::SplitWindow(frame::Orientation::Horizontal));
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE}],
+    Cmd::CloseWindow);
+  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+               Key::Unicode{codepoint: '=', mods: keymap::MOD_NONE}],
+    Cmd::ResetLayout);
+  chain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_NONE}],
+    Cmd::GrowWindow(frame::Orientation::Horizontal));
+  chain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_CTRL}],
+    Cmd::ShrinkWindow(frame::Orientation::Horizontal));
+  chain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_NONE}],
+    Cmd::GrowWindow(frame::Orientation::Vertical));
+  chain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
+    Cmd::ShrinkWindow(frame::Orientation::Vertical));
+  chain.bind(&[Key::Unicode{codepoint: 'n', mods: keymap::MOD_NONE}],
+    Cmd::ShiftFocus(frame::WindowOrder::NextWindow));
+  chain.bind(&[Key::Unicode{codepoint: 'N', mods: keymap::MOD_NONE}],
+    Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
+  chain.bind(&[Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
+    Cmd::Quit);
+  return chain;
+}
+
+#[cfg(not(test))]
+fn default_normal_keychain() -> command::Keychain {
+  use keymap::{Key, KeySym};
+  use command::{Cmd, WinCmd};
+  let mut chain = command::Keychain::new();
+  chain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharPrev)));
+  chain.bind(&[Key::Sym{sym: KeySym::Right, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharNext)));
+  chain.bind(&[Key::Sym{sym: KeySym::Up, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineUp)));
+  chain.bind(&[Key::Sym{sym: KeySym::Down, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineDown)));
+  chain.bind(&[Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharPrev)));
+  chain.bind(&[Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharNext)));
+  chain.bind(&[Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineUp)));
+  chain.bind(&[Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineDown)));
+  return chain;
 }
