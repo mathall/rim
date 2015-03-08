@@ -42,7 +42,8 @@ struct Window {
   view: view::View,
   rect: screen::Rect,
   needs_redraw: bool,
-  normal_keychain: command::Keychain,
+  normal_mode: command::Mode,
+  insert_mode: command::Mode,
 }
 
 #[cfg(not(test))]
@@ -52,7 +53,8 @@ impl Window {
       view: view::View::new(),
       rect: screen::Rect(screen::Cell(0, 0), screen::Size(0, 0)),
       needs_redraw: true,
-      normal_keychain: default_normal_keychain(),
+      normal_mode: default_normal_mode(),
+      insert_mode: default_insert_mode(),
     }
   }
 }
@@ -75,9 +77,8 @@ impl Rim {
     let (frame, frame_ctx, first_win_id) = frame::Frame::new();
     let mut windows = HashMap::new();
     let first_win = Window::new();
-    cmd_thread.set_keychain(default_keychain(), 0).ok().expect(
-      "Command thread died.");
-    cmd_thread.set_keychain(first_win.normal_keychain.clone(), 1).ok().expect(
+    cmd_thread.set_mode(default_mode(), 0).ok().expect("Command thread died.");
+    cmd_thread.set_mode(first_win.normal_mode.clone(), 1).ok().expect(
       "Command thread died.");
     windows.insert(first_win_id.clone(), first_win);
     Rim {
@@ -105,7 +106,7 @@ impl Rim {
   fn set_focus(&mut self, win_id: frame::WindowId) {
     assert!(self.windows.contains_key(&win_id));
     self.windows.get(&win_id).map(|win|
-      self.cmd_thread.set_keychain(win.normal_keychain.clone(), 1).ok().expect(
+      self.cmd_thread.set_mode(win.normal_mode.clone(), 1).ok().expect(
         "Command thread died."));
     self.windows.get_mut(&win_id).map(|win| win.needs_redraw = true);
     self.windows.get_mut(&self.focus).map(|win| win.needs_redraw = true);
@@ -206,6 +207,12 @@ impl Rim {
         win.view.move_caret(movement, &self.buffer);
         win.needs_redraw = true;
       }
+      command::WinCmd::EnterNormalMode     =>
+        self.cmd_thread.set_mode(win.normal_mode.clone(), 1).ok().expect(
+          "Command thread died."),
+      command::WinCmd::EnterInsertMode     =>
+        self.cmd_thread.set_mode(win.insert_mode.clone(), 1).ok().expect(
+          "Command thread died."),
     }
   }
 }
@@ -272,71 +279,93 @@ fn main() {
 }
 
 #[cfg(not(test))]
-fn default_keychain() -> command::Keychain {
+fn default_mode() -> command::Mode {
   use keymap::Key;
   use command::Cmd;
-  let mut chain = command::Keychain::new();
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
+  let mut mode = command::Mode::new();
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Left));
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Right));
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Up));
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Down));
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: 'v', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: 'v', mods: keymap::MOD_NONE}],
     Cmd::SplitWindow(frame::Orientation::Vertical));
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: 's', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: 's', mods: keymap::MOD_NONE}],
     Cmd::SplitWindow(frame::Orientation::Horizontal));
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE}],
     Cmd::CloseWindow);
-  chain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-               Key::Unicode{codepoint: '=', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
+                       Key::Unicode{codepoint: '=', mods: keymap::MOD_NONE}],
     Cmd::ResetLayout);
-  chain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_NONE}],
     Cmd::GrowWindow(frame::Orientation::Horizontal));
-  chain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_CTRL}],
     Cmd::ShrinkWindow(frame::Orientation::Horizontal));
-  chain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_NONE}],
     Cmd::GrowWindow(frame::Orientation::Vertical));
-  chain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
     Cmd::ShrinkWindow(frame::Orientation::Vertical));
-  chain.bind(&[Key::Unicode{codepoint: 'n', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'n', mods: keymap::MOD_NONE}],
     Cmd::ShiftFocus(frame::WindowOrder::NextWindow));
-  chain.bind(&[Key::Unicode{codepoint: 'N', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'N', mods: keymap::MOD_NONE}],
     Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
-  chain.bind(&[Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
     Cmd::Quit);
-  return chain;
+  return mode;
 }
 
 #[cfg(not(test))]
-fn default_normal_keychain() -> command::Keychain {
+fn default_normal_mode() -> command::Mode {
   use keymap::{Key, KeySym};
   use command::{Cmd, WinCmd};
-  let mut chain = command::Keychain::new();
-  chain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
+  let mut mode = command::Mode::new();
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharPrev)));
-  chain.bind(&[Key::Sym{sym: KeySym::Right, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Right, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharNext)));
-  chain.bind(&[Key::Sym{sym: KeySym::Up, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Up, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineUp)));
-  chain.bind(&[Key::Sym{sym: KeySym::Down, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Down, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineDown)));
-  chain.bind(&[Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharPrev)));
-  chain.bind(&[Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharNext)));
-  chain.bind(&[Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineUp)));
-  chain.bind(&[Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineDown)));
-  return chain;
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'i', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterInsertMode));
+  return mode;
+}
+
+#[cfg(not(test))]
+fn default_insert_mode() -> command::Mode {
+  use keymap::{Key, KeySym};
+  use command::{Cmd, WinCmd};
+  let mut mode = command::Mode::new();
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Escape, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterNormalMode));
+  fn fallback(key: keymap::Key) -> Option<command::Cmd> {
+    match key {
+      Key::Sym{sym: KeySym::Left, mods: _}  => Some(frame::Direction::Left),
+      Key::Sym{sym: KeySym::Right, mods: _} => Some(frame::Direction::Right),
+      Key::Sym{sym: KeySym::Up, mods: _}    => Some(frame::Direction::Up),
+      Key::Sym{sym: KeySym::Down, mods: _}  => Some(frame::Direction::Down),
+      _                                     => None,
+    }.map(|direction| Cmd::MoveFocus(direction))
+  }
+  mode.fallback = fallback;
+  return mode;
 }

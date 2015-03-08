@@ -25,15 +25,16 @@ const TIMEOUT: i64 = 100;
 /*
  * CmdThread is the interface for instructing the command thread. It is returned
  * when the thread is started and it will tear down the thread when dropped.
- * Keychains must be set with priority order (high number, high priority) for
- * arriving keys to form commands. A higher prioritized keychain will always be
- * given a first chance to process keys. A keychain may decide it wants to wait
- * for more keys before possibly producing a command, however, it may only do so
- * for a set time. After a timeout, the keys arrived so far will be drained from
- * the buffer by forcing keychains to only match keys to complete commands.
+ * Modes must be set with priority order (high number, high priority) for
+ * arriving keys to form commands. A higher prioritized mode will always be
+ * given a first chance to process keys. A mode's keychain may decide it wants
+ * to wait for more keys before possibly producing a command, however, it may
+ * only do so for a set time. After a timeout, the keys arrived so far will be
+ * drained from the buffer by forcing keychains to only match keys to complete
+ * commands.
  * Between each command produced and sent to the client, the client must ack the
  * arrival of the command before the command thread can proceed to process
- * further keys. This allows the client to for instance set a new keychain to be
+ * further keys. This allows the client to for instance set a new mode to be
  * used for the keys ahead.
  * A key receiver must be set after that the thread has been setup to process
  * keys as desired for the first time.
@@ -45,8 +46,8 @@ pub struct CmdThread {
 }
 
 impl CmdThread {
-  pub fn set_keychain(&self, keychain: Keychain, num: uint) -> Result<(), ()> {
-    self.msg_tx.send(Msg::SetKeychain(keychain, num)).map_err(|_| ())
+  pub fn set_mode(&self, mode: Mode, num: uint) -> Result<(), ()> {
+    self.msg_tx.send(Msg::SetMode(mode, num)).map_err(|_| ())
   }
 
   pub fn set_key_rx(&self, key_rx: Receiver<keymap::Key>)
@@ -71,7 +72,7 @@ impl Drop for CmdThread {
  * Messages used by CmdThread to instruct the command thread.
  */
 enum Msg {
-  SetKeychain(Keychain, uint),
+  SetMode(Mode, uint),
   SetKeyRx(Receiver<keymap::Key>),
   AckCmd,
 }
@@ -125,9 +126,9 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
   let mut back_seq = 0u;
   let mut front_seq = 0u;
 
-  // keychains used to make commands out of a stream of keys, a higher index/key
+  // modes used to make commands out of a stream of keys, a higher index/key
   // implies higher priority
-  let mut keychains = VecMap::new();
+  let mut modes = VecMap::new();
 
   // keeps track of what we want to drain right now and, if we've already
   // requested a timeout, the seq we want to drain when that timeout hits
@@ -150,9 +151,9 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
       },
       msg = msg_rx.recv()     => {
         match msg.ok().expect("Message channel died.") {
-          Msg::SetKeychain(chain, num) => { keychains.insert(num, chain); }
-          Msg::SetKeyRx(rx)            => { new_key_rx = Some(rx); }
-          Msg::AckCmd                  => { cmd_acknowledged = true; }
+          Msg::SetMode(mode, num) => { modes.insert(num, mode); }
+          Msg::SetKeyRx(rx)       => { new_key_rx = Some(rx); }
+          Msg::AckCmd             => { cmd_acknowledged = true; }
         }
       }
     );
@@ -164,16 +165,20 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
       // determine whether to drain some keys
       let drain_amount = drain_seq as int - front_seq as int;
       let drain = drain_amount > 0;
-      // match keys with keychains in chain priority order
+      // match keys with modes in priority order
       let mut match_result = MatchResult::None;
-      for (_, chain) in keychains.iter().rev() {
+      for (_, mode) in modes.iter().rev() {
+        // first match by keychain
         match_result =
-          if drain {
-            chain.match_keys(&mut keys.iter().take(drain_amount as uint), drain)
-          }
-          else {
-            chain.match_keys(&mut keys.iter(), drain)
-          };
+          if drain { mode.keychain.match_keys(
+                       &mut keys.iter().take(drain_amount as uint), drain) }
+          else     { mode.keychain.match_keys(&mut keys.iter(), drain) };
+        // use the mode's fallback if the keychain didn't match anything
+        if match_result == MatchResult::None {
+          (mode.fallback)(keys[0]).map(|cmd|
+            match_result = MatchResult::Complete(cmd, 1));
+        }
+        // proceed to next mode only if no match was made
         if match_result != MatchResult::None { break; }
       }
 
@@ -200,6 +205,24 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
   }
 
   died_tx.send(()).unwrap();
+}
+
+/*
+ * A Mode is what the command thread use to form commands out of keys. It
+ * consist of a keychain and a fallback command contructor for when the keychain
+ * doesn't match on a string of keys.
+ */
+#[derive(Clone)]
+pub struct Mode {
+  pub keychain: Keychain,
+  pub fallback: fn(keymap::Key) -> Option<Cmd>
+}
+
+impl Mode {
+  pub fn new() -> Mode {
+    fn fallback(_: keymap::Key) -> Option<Cmd> { None }
+    Mode { keychain: Keychain::new(), fallback: fallback }
+  }
 }
 
 /*
@@ -322,6 +345,8 @@ pub enum Cmd {
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum WinCmd {
   MoveCaret(view::CaretMovement),
+  EnterNormalMode,
+  EnterInsertMode,
 }
 
 #[cfg(test)]
@@ -377,89 +402,94 @@ mod test {
     }
   }
 
-  fn keychain_0() -> super::Keychain {
-    let mut chain = super::Keychain::new();
-    chain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+  fn mode_0() -> super::Mode {
+    let mut mode = super::Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::Quit);
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::ResetLayout);
-    chain.bind(&[Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::CloseWindow);
-    return chain;
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE}],
+      super::Cmd::CloseWindow);
+    return mode;
   }
 
-  fn keychain_1() -> super::Keychain {
-    let mut chain = super::Keychain::new();
-    chain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+  fn mode_1() -> super::Mode {
+    let mut mode = super::Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::MoveFocus(frame::Direction::Left));
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::MoveFocus(frame::Direction::Right));
-    chain.bind(&[Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::MoveFocus(frame::Direction::Up));
-    return chain;
+    return mode;
   }
 
-  fn keychain_2() -> super::Keychain {
-    let mut chain = super::Keychain::new();
-    chain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+  fn mode_2() -> super::Mode {
+    let mut mode = super::Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::Quit);
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::ResetLayout);
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
       super::Cmd::CloseWindow);
-    return chain;
+    return mode;
   }
 
-  fn keychain_3() -> super::Keychain {
-    let mut chain = super::Keychain::new();
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
+  fn mode_3() -> super::Mode {
+    let mut mode = super::Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
       super::Cmd::MoveFocus(frame::Direction::Right));
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
       super::Cmd::MoveFocus(frame::Direction::Up));
-    return chain;
+    return mode;
   }
 
-  fn keychain_4() -> super::Keychain {
-    let mut chain = super::Keychain::new();
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+  fn mode_4() -> super::Mode {
+    let mut mode = super::Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
       super::Cmd::Quit);
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
       super::Cmd::ResetLayout);
-    chain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                 Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
       super::Cmd::CloseWindow);
-    return chain;
+    return mode;
   }
 
   #[test]
-  fn single_keychain() {
+  fn single_mode() {
     let inputs = vec!(vec!(
       // Quit
       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
@@ -487,13 +517,13 @@ mod test {
       super::Cmd::CloseWindow,
       super::Cmd::ResetLayout);
     let setup = |cmd_thread: &super::CmdThread| {
-      cmd_thread.set_keychain(keychain_0(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_0(), 0).unwrap(); };
     let callback = |_: super::Cmd, _: &super::CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
   #[test]
-  fn multiple_keychain() {
+  fn multiple_modes() {
     let inputs = vec!(vec!(
       // MoveFocus(Left)
       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
@@ -501,8 +531,8 @@ mod test {
       Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE},
       // MoveFocus(Left)
       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      // mistype cbabaa, get CloseWindow from chain0 (cba), MoveFocus(Right)
-      // overriding from chain1 (ba), leaving c in the buffer
+      // mistype cbabaa, get CloseWindow from mode0 (cba), MoveFocus(Right)
+      // overriding from mode1 (ba), leaving c in the buffer
       Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
       Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
@@ -522,14 +552,14 @@ mod test {
       super::Cmd::MoveFocus(frame::Direction::Right),
       super::Cmd::MoveFocus(frame::Direction::Up));
     let setup = |cmd_thread: &super::CmdThread| {
-      cmd_thread.set_keychain(keychain_0(), 0).unwrap();
-      cmd_thread.set_keychain(keychain_1(), 1).unwrap(); };
+      cmd_thread.set_mode(mode_0(), 0).unwrap();
+      cmd_thread.set_mode(mode_1(), 1).unwrap(); };
     let callback = |_: super::Cmd, _: &super::CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
   #[test]
-  fn single_keychain_timeout() {
+  fn single_mode_timeout() {
     let inputs = vec!(
       vec!(
         // CloseWindow
@@ -550,16 +580,16 @@ mod test {
       super::Cmd::ResetLayout,
       super::Cmd::Quit);
     let setup = |cmd_thread: &super::CmdThread| {
-      cmd_thread.set_keychain(keychain_2(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_2(), 0).unwrap(); };
     let callback = |_: super::Cmd, _: &super::CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
   #[test]
-  fn multiple_keychain_timeout() {
+  fn multiple_mode_timeout() {
     let inputs = vec!(vec!(
-      // Timeout: MoveFocus(Right) (bab override on chain1), throw c away,
-      // Quit (chain0), ResetLayout (chain0)
+      // Timeout: MoveFocus(Right) (bab override on mode1), throw c away,
+      // Quit (mode0), ResetLayout (mode0)
       Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
       Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
@@ -572,14 +602,14 @@ mod test {
       super::Cmd::Quit,
       super::Cmd::ResetLayout);
     let setup = |cmd_thread: &super::CmdThread| {
-      cmd_thread.set_keychain(keychain_2(), 0).unwrap();
-      cmd_thread.set_keychain(keychain_3(), 1).unwrap(); };
+      cmd_thread.set_mode(mode_2(), 0).unwrap();
+      cmd_thread.set_mode(mode_3(), 1).unwrap(); };
     let callback = |_: super::Cmd, _: &super::CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
   #[test]
-  fn change_keychain() {
+  fn change_mode() {
     let inputs = vec!(vec!(
       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
@@ -587,19 +617,55 @@ mod test {
       super::Cmd::Quit,
       super::Cmd::MoveFocus(frame::Direction::Left));
     let setup = |cmd_thread: &super::CmdThread| {
-      cmd_thread.set_keychain(keychain_0(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_0(), 0).unwrap(); };
     let callback = |_: super::Cmd, cmd_thread: &super::CmdThread| {
-      cmd_thread.set_keychain(keychain_1(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_1(), 0).unwrap(); };
+    run_test(inputs, outputs, setup, callback);
+  }
+
+  #[test]
+  fn mode_fallback_command_constructor() {
+    let inputs = vec!(
+      vec!(
+        // ResetLayout, normal match
+        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+        // Fallback, plain miss
+        Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE},
+        // mistype dbad, triggering first miss then match on ba, then miss again
+        Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE}),
+      vec!(
+        // timeout on partial dbad, triggering first miss then match on ba
+        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
+    let outputs = vec!(
+      super::Cmd::ResetLayout,
+      super::Cmd::Quit,
+      super::Cmd::Quit,
+      super::Cmd::ResetLayout,
+      super::Cmd::Quit,
+      super::Cmd::Quit,
+      super::Cmd::ResetLayout);
+    let setup = |cmd_thread: &super::CmdThread| {
+      let mut mode = mode_0();
+      fn fallback(_: Key) -> Option<super::Cmd> { Some(super::Cmd::Quit) }
+      mode.fallback = fallback;
+      cmd_thread.set_mode(mode, 0).unwrap(); };
+    let callback = |_: super::Cmd, _: &super::CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
   #[test]
   fn keychain_matching() {
-    let chain = keychain_4();
+    let mode = mode_4();
 
-    let match_test = |keys: Vec<Key>, result, forced_result| {
-      assert_eq!(chain.match_keys(&mut keys.iter(), false), result);
-      assert_eq!(chain.match_keys(&mut keys.iter(), true), forced_result); };
+    let match_test = |keys: Vec<Key>, regular, forced| {
+      assert_eq!(mode.keychain.match_keys(&mut keys.iter(), false), regular);
+      assert_eq!(mode.keychain.match_keys(&mut keys.iter(), true), forced); };
 
     // no matches
     let keys = vec!(Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE});
