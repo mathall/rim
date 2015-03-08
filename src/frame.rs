@@ -102,6 +102,7 @@ enum SectionSide {
  * section tree.
  */
 #[derive(Copy, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
 pub enum Orientation {
   Vertical,
   Horizontal,
@@ -620,7 +621,8 @@ impl error::Error for FrameError {
 
 type FrameResult<T> = Result<T, FrameError>;
 
-#[derive(Copy)]
+#[derive(Copy, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
 pub enum Direction {
   Left,
   Right,
@@ -629,6 +631,7 @@ pub enum Direction {
 }
 
 #[derive(Copy, PartialEq)]
+#[cfg_attr(test, derive(Debug))]
 pub enum WindowOrder {
   NextWindow,
   PreviousWindow,

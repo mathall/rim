@@ -58,7 +58,7 @@ impl Sub for Cell {
   }
 }
 
-#[derive(Copy)]
+#[derive(Copy, PartialEq)]
 pub struct Rect(pub Cell, pub Size);
 
 impl Rect {
