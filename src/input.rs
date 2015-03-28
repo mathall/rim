@@ -291,7 +291,7 @@ mod test {
     thread::spawn(move || {
       let mut pipe_out = PipeStream::open(writer);
       for input in inputs.iter() {
-        pipe_out.write_all(input.as_slice()).unwrap();
+        pipe_out.write_all(&input).unwrap();
         // give termkey a chance to parse escape as a standalone key
         timer::sleep(Duration::milliseconds(1));
       }

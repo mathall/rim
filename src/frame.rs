@@ -1131,7 +1131,7 @@ mod test {
     for descriptor_nr in 0..SPLIT_DESCRIPTORS.len() {
       let num_windows = SPLIT_DESCRIPTORS[descriptor_nr].len() + 1;
       let window_nrs: Vec<uint> = (0..num_windows).collect();
-      for window_nrs in window_nrs.as_slice().permutations().take(100) {
+      for window_nrs in window_nrs.permutations().take(100) {
         let (mut frame, mut ctx, windows) = setup_frame(descriptor_nr);
         let close_last = window_nrs[0];
         for &window_nr in window_nrs.iter().skip(1) {

@@ -147,7 +147,7 @@ impl PageTree {
     match if go_left { &self.left } else { &self.right } {
       &Nil            => None,
       &Tree(ref tree) => tree.get_char_by_offset(new_offset),
-      &Leaf(ref page) => page.data.as_slice().chars().nth(new_offset),
+      &Leaf(ref page) => page.data.chars().nth(new_offset),
     }
   }
 
@@ -401,7 +401,7 @@ impl<'l> CharIterator<'l> {
     assert!(start < end && end <= tree.length);
     let mut pages = PageTreeIterator::new(tree, start);
     let page = pages.next().unwrap();
-    let mut chars = page.data.as_slice().chars();
+    let mut chars = page.data.chars();
     for _ in 0..((start + page.length) - pages.next_offset) { chars.next(); }
     CharIterator {
       counter: end - start,
@@ -418,7 +418,7 @@ impl<'l> Iterator for CharIterator<'l> {
     if self.counter == 0 { None } else {
       self.counter -= 1;
       self.chars.as_mut().and_then(|ref mut chars| chars.next()).or_else(|| {
-        self.chars = self.pages.next().map(|page| page.data.as_slice().chars());
+        self.chars = self.pages.next().map(|page| page.data.chars());
         self.chars.as_mut().and_then(|ref mut chars| chars.next()) })
     }
   }
@@ -477,10 +477,10 @@ impl Page {
 
   fn insert_string_at_offset(&mut self, string: String, offset: uint) {
     assert!(offset <= self.data.chars().count());
-    let byte_offset = self.data.as_slice().slice_chars(0, offset).len() as int;
+    let byte_offset = self.data.slice_chars(0, offset).len() as int;
     let original_size = self.data.len();
     let string_size = string.len();
-    self.data.push_str(string.as_slice());  // first grow organically
+    self.data.push_str(&string);  // first grow organically
     unsafe {
       let bytes_mut = self.data.as_mut_vec().as_mut_ptr();
       // make place by shifting some original data to the side
@@ -499,7 +499,7 @@ impl Page {
     self.length = self.data.chars().count();
     self.newline_offsets.clear();
     let mut offset = 0;
-    for character in self.data.as_slice().chars() {
+    for character in self.data.chars() {
       if character == '\n' { self.newline_offsets.push(offset); }
       offset += 1;
     }
@@ -581,7 +581,7 @@ impl PageStream {
     // adjust for multi-byte code-points spanning page boundaries
     let replacement_char = '\u{FFFD}';
     let string_len = string.len();
-    if string.as_slice().char_at_reverse(string_len - 1) == replacement_char {
+    if string.char_at_reverse(string_len - 1) == replacement_char {
       string.truncate(string_len - replacement_char.len_utf8());
       num_truncated_bytes = data.len() - string.len();
     }
@@ -663,7 +663,7 @@ impl Buffer {
     File::create(path).
     and_then(|mut file|
       self.tree.iter().
-      map(|page| file.write_all(page.data.as_bytes().as_slice())).
+      map(|page| file.write_all(page.data.as_bytes())).
       fold(Ok(()),
         |ok, err| if ok.is_ok() && err.is_err() { err } else { ok })).
     map_err(|io_err| BufferError::IoError(io_err))
@@ -730,9 +730,9 @@ mod test {
     use std::error::Error;
     use std::io::Read;
     let result_path_string = format!("tests/buffer/{}-result.txt", test);
-    let result_path = Path::new(result_path_string.as_slice());
+    let result_path = Path::new(&result_path_string);
     let expect_path_string = format!("tests/buffer/{}-expect.txt", test);
-    let expect_path = Path::new(expect_path_string.as_slice());
+    let expect_path = Path::new(&expect_path_string);
 
     let result = make_buffer().
       map(|mut buffer| { operation(&mut buffer); buffer }).
@@ -769,7 +769,7 @@ mod test {
           if $new_file { Box::new(|| Ok(super::Buffer::new())) }
           else { Box::new(|| {
             let test_path_string = format!("tests/buffer/{}.txt", &test);
-            let test_path = Path::new(test_path_string.as_slice());
+            let test_path = Path::new(&test_path_string);
             return super::Buffer::open(&test_path);
           }) };
         buffer_test(&test, $operation, buffer_maker);
