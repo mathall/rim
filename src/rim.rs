@@ -18,8 +18,6 @@
 #![feature(str_char)]
 #![feature(unicode)]
 
-#![cfg_attr(test, feature(os))]
-
 #[macro_use]
 extern crate bitflags;
 

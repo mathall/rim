@@ -230,10 +230,9 @@ mod test {
   extern crate time;
 
   use super::libc;
+  use std::mem;
   use std::sync::mpsc::{channel, Sender};
-  use std::old_io::pipe::PipeStream;
   use std::old_io::timer;
-  use std::os;
   use std::thread;
   use std::time::duration::Duration;
 
@@ -270,33 +269,42 @@ mod test {
 
     // set up communication channels
     let (key_tx, key_rx) = channel();
-    let os::Pipe { reader, writer } = unsafe { os::pipe().unwrap() };
-
-    // start input listener
-    let _term_input = super::start_on_fd(reader, key_tx);
+    let (reader_fd, writer_fd) = unsafe {
+      let mut fds = [0; 2];
+      if libc::pipe(fds.as_mut_ptr()) != 0 { panic!("Failed to create pipe"); }
+      (fds[0], fds[1])
+    };
 
     // make sure we quit in an orderly fashion even at failure
     let (close_writer_tx, close_writer_rx) = channel();
-    struct PipeKiller { close_writer_tx: Sender<()>, reader: libc::c_int }
+    struct PipeKiller { close_writer_tx: Sender<()>, reader_fd: libc::c_int }
     impl Drop for PipeKiller {
       fn drop(&mut self) {
-        unsafe { libc::close(self.reader); }
+        unsafe { libc::close(self.reader_fd); }
         self.close_writer_tx.send(()).unwrap();
       }
     }
     let _pipe_killer =
-      PipeKiller { close_writer_tx: close_writer_tx, reader: reader };
+      PipeKiller { close_writer_tx: close_writer_tx, reader_fd: reader_fd };
+
+    // start input listener
+    let _term_input = super::start_on_fd(reader_fd, key_tx);
 
     // simulate keyboard input
     thread::spawn(move || {
-      let mut pipe_out = PipeStream::open(writer);
       for input in inputs.iter() {
-        pipe_out.write_all(&input).unwrap();
+        unsafe {
+          let buffer = mem::transmute(&input[0]);
+          let count = input.len() as libc::size_t;
+          libc::write(writer_fd, buffer, count);
+        }
+
         // give termkey a chance to parse escape as a standalone key
         timer::sleep(Duration::milliseconds(1));
       }
       // keep the pipe alive until we're finished with it
       close_writer_rx.recv().unwrap();
+      unsafe { libc::close(writer_fd); }
     });
 
     // receive key outputs and match with expectations
