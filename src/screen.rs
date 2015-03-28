@@ -363,7 +363,7 @@ mod term_size {
     unsafe {
       let mut size = WinSize { rows: 0, cols: 0, h_pixels: 0, v_pixels: 0 };
       match ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut size) {
-        0 => Some((size.rows as u16, size.cols as u16)),
+        0 => Some((size.rows, size.cols)),
         _ => None,
       }
     }
