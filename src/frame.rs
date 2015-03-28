@@ -1128,9 +1128,9 @@ mod test {
   // And of course check invariants along the way.
   #[test]
   fn split_and_close() {
-    for descriptor_nr in range(0, SPLIT_DESCRIPTORS.len()) {
+    for descriptor_nr in 0..SPLIT_DESCRIPTORS.len() {
       let num_windows = SPLIT_DESCRIPTORS[descriptor_nr].len() + 1;
-      let window_nrs: Vec<uint> = range(0, num_windows).collect();
+      let window_nrs: Vec<uint> = (0..num_windows).collect();
       for window_nrs in window_nrs.as_slice().permutations().take(100) {
         let (mut frame, mut ctx, windows) = setup_frame(descriptor_nr);
         let close_last = window_nrs[0];
@@ -1148,14 +1148,14 @@ mod test {
   fn split_beyond_frame_size_and_close() {
     let (mut frame, mut ctx, mut windows) = setup_frame(0);
 
-    for window_nr in range(0, 100) {
+    for window_nr in 0..100 {
       let new_window = frame.split_window(
         &mut ctx, &windows[window_nr], Vertical).unwrap();
       windows.push(new_window);
       check_frame_invariants(&frame, &ctx);
     }
 
-    for window_nr in range(50, windows.len()).chain(range(1, 50)) {
+    for window_nr in (50..windows.len()).chain(1..50) {
       frame.close_window(&mut ctx, &windows[window_nr]).unwrap();
       check_frame_invariants(&frame, &ctx);
     }
@@ -1417,7 +1417,7 @@ mod test {
                         (uint, super::Orientation, int)) {
     // calculate and collect expected sizes after resizing a window
     let expectations: Vec<(super::WindowId, screen::Size)> =
-      range(0, windows.len()).map(|win| {
+      (0..windows.len()).map(|win| {
         let window = windows[win].clone();
         let change = window_changes.get(&win).map(|&x| x).unwrap_or(0);
         let screen::Rect(_, screen::Size(rows, cols)) =

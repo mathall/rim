@@ -402,9 +402,7 @@ impl<'l> CharIterator<'l> {
     let mut pages = PageTreeIterator::new(tree, start);
     let page = pages.next().unwrap();
     let mut chars = page.data.as_slice().chars();
-    for _ in range(0, (start + page.length) - pages.next_offset) {
-      chars.next();
-    }
+    for _ in 0..((start + page.length) - pages.next_offset) { chars.next(); }
     CharIterator {
       counter: end - start,
       pages: pages,
@@ -789,7 +787,7 @@ mod test {
       #[test]
       fn $name() {
         let mut tree = super::PageTree::new();
-        for _ in range(0, $num_pages) {
+        for _ in 0..$num_pages {
           tree.$fun(super::Page::new(String::from_str("a")));
         }
         assert!(is_balanced(&tree));
@@ -811,7 +809,7 @@ mod test {
         let mut tree = super::PageTree::new();
         let denominator = 4u;
         let mut numerator = 0u;
-        for i in range(0, $num_pages) {
+        for i in 0..$num_pages {
           let page = super::Page::new(String::from_str("abc"));
           let fraction = (numerator as f32) / (denominator as f32);
           let offset = ((i as f32) * fraction) as uint * page.length;
@@ -925,7 +923,7 @@ mod test {
   fn line_length_test(path: &Path, expect: &[uint]) {
     let buffer = super::Buffer::open(path).unwrap();
     assert_eq!(buffer.num_lines(), expect.len());
-    for line in range(0, buffer.num_lines()) {
+    for line in 0..buffer.num_lines() {
       assert_eq!(buffer.line_length(line).unwrap(), expect[line]);
     }
   }

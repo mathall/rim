@@ -155,7 +155,7 @@ impl View {
         let end_col = col + char_width;
         if (col < 0 && end_col >= 0) || end_col > cols as int {
           // blank out partially visible characters
-          for col in range(cmp::max(0, col), cmp::min(end_col, cols as int)) {
+          for col in cmp::max(0, col)..cmp::min(end_col, cols as int) {
             put(' ', line_offset + screen::Cell(0, col as u16), screen);
           }
         }
@@ -165,16 +165,16 @@ impl View {
         col += char_width;
       }
       // blank out the rest of the row if the line didn't fill it
-      for col in range(cmp::max(0, col) as u16, cols) {
+      for col in cmp::max(0, col) as u16..cols {
         put(' ', line_offset + screen::Cell(0, col), screen);
       }
       row += 1;
     }
     // fill in the rest of the view below the buffer content
-    for row in range(row, rows) {
+    for row in row..rows {
       let line_offset = screen::Cell(row, 0) + position;
       put(if self.scroll_column == 0 { '~' } else { ' ' }, line_offset, screen);
-      for col in range(1, cols) {
+      for col in 1..cols {
         put(' ', line_offset + screen::Cell(0, col), screen);
       }
     }
