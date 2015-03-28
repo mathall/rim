@@ -232,7 +232,6 @@ mod test {
   use super::libc;
   use std::mem;
   use std::sync::mpsc::{channel, Sender};
-  use std::old_io::timer;
   use std::thread;
   use std::time::duration::Duration;
 
@@ -300,7 +299,7 @@ mod test {
         }
 
         // give termkey a chance to parse escape as a standalone key
-        timer::sleep(Duration::milliseconds(1));
+        thread::sleep(Duration::milliseconds(1));
       }
       // keep the pipe alive until we're finished with it
       close_writer_rx.recv().unwrap();

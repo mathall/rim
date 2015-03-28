@@ -18,6 +18,8 @@
 #![feature(str_char)]
 #![feature(unicode)]
 
+#![cfg_attr(test, feature(thread_sleep))]
+
 #[macro_use]
 extern crate bitflags;
 

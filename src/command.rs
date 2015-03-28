@@ -367,7 +367,6 @@ mod test {
     use std::sync::mpsc::channel;
     use std::time::duration::Duration;
     use std::old_io::Timer;
-    use std::old_io::timer;
     use std::thread;
 
     // set up communication channels
@@ -383,7 +382,7 @@ mod test {
     thread::spawn(move || {
       for keys in inputs.iter() {
         for key in keys.iter() { key_tx.send(*key).unwrap(); }
-        timer::sleep(Duration::milliseconds(super::TIMEOUT + 10));
+        thread::sleep(Duration::milliseconds(super::TIMEOUT + 10));
       }
     });
 
