@@ -353,8 +353,6 @@ pub enum WinCmd {
 
 #[cfg(test)]
 mod test {
-  extern crate time;
-
   use frame;
   use keymap;
   use keymap::Key;
@@ -367,7 +365,7 @@ mod test {
       where S: Fn(&super::CmdThread) -> (),
             C: Fn(super::Cmd, &super::CmdThread) -> () {
     use std::sync::mpsc::channel;
-    use std::time::duration::Duration;
+    use std::time::Duration;
     use std::thread;
 
     // set up communication channels

@@ -227,13 +227,11 @@ fn translate_mods(mods: termkey::c::X_TermKey_KeyMod) -> keymap::KeyMod {
 
 #[cfg(test)]
 mod test {
-  extern crate time;
-
   use super::libc;
   use std::mem;
   use std::sync::mpsc::{channel, Sender};
   use std::thread;
-  use std::time::duration::Duration;
+  use std::time::Duration;
 
   use keymap;
 
