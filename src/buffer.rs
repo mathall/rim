@@ -624,7 +624,7 @@ impl fmt::Display for BufferError {
 impl error::Error for BufferError {
   fn description(&self) -> &str {
     match *self {
-      BufferError::IoError(ref err) => err.description(),
+      BufferError::IoError(ref err) => ::std::error::Error::description(err),
       BufferError::NoPath           => "The buffer had no path.",
     }
   }
@@ -748,10 +748,10 @@ mod test {
     let expect_content = file_contents(&expect_path);
 
     match (result_content, result, expect_content) {
-      (Err(err),   _,        _         ) => panic!("{}", err.description()),
-      (_,          Err(err), _         ) => panic!("{}", err.description()),
-      (_,          _,        Err(err)  ) => panic!("{}", err.description()),
-      (Ok(result), Ok(_),    Ok(expect)) => assert_eq!(result, expect),
+      (Err(e),     _,      _         ) => panic!("{}", Error::description(&e)),
+      (_,          Err(e), _         ) => panic!("{}", Error::description(&e)),
+      (_,          _,      Err(e)    ) => panic!("{}", Error::description(&e)),
+      (Ok(result), Ok(_),  Ok(expect)) => assert_eq!(result, expect),
     };
   }
 
