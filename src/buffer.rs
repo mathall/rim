@@ -630,7 +630,7 @@ impl error::Error for BufferError {
   }
 }
 
-type BufferResult<T> = Result<T, BufferError>;
+pub type BufferResult<T> = Result<T, BufferError>;
 
 /*
  * The buffer is used to open, modify and write files back to disk.
