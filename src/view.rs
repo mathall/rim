@@ -63,7 +63,7 @@ impl View {
     // make sure wider characters are scrolled in entirely as well
     let character = buffer.get_char_by_line_column(line, column).unwrap();
     let start = buffer_to_screen_column(line, column, buffer);
-    let end = start + CharExt::width(character, false).unwrap_or(1) - 1;
+    let end = start + character.width(false).unwrap_or(1) - 1;
     self.scroll_column =
       if start < self.scroll_column { start }
       else if end >= self.scroll_column + cols { end - cols + 1 }
@@ -151,7 +151,7 @@ impl View {
       let mut col = -(self.scroll_column as int);
       for character in chars {
         if col >= cols as int || character == '\n' { break }
-        let char_width = CharExt::width(character, false).unwrap_or(0) as int;
+        let char_width = character.width(false).unwrap_or(0) as int;
         let end_col = col + char_width;
         if (col < 0 && end_col >= 0) || end_col > cols as int {
           // blank out partially visible characters
@@ -185,7 +185,7 @@ impl View {
 fn buffer_to_screen_column(line: uint, column: uint, buffer: &buffer::Buffer)
     -> uint {
   buffer.line_iter().from(line).next().map(|chars|
-    chars.take(column).map(|c| CharExt::width(c, false).unwrap_or(0)).sum()).
+    chars.take(column).map(|c| c.width(false).unwrap_or(0)).sum()).
   unwrap_or(0)
 }
 
@@ -194,7 +194,7 @@ fn screen_to_buffer_column(row: uint, screen_column: uint,
     buffer: &buffer::Buffer) -> Option<uint> {
   buffer.line_iter().from(row).next().map(|chars|
     chars.filter(|&c| c != '\n').scan(0, |sum, c| {
-      *sum += CharExt::width(c, false).unwrap_or(0);
+      *sum += c.width(false).unwrap_or(0);
       Some(*sum) }).
     take_while(|&sum| sum <= screen_column).count())
 }
