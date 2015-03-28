@@ -15,6 +15,7 @@
 #![feature(path)]
 #![feature(rustc_private)]
 #![feature(std_misc)]
+#![feature(str_char)]
 #![feature(unicode)]
 
 #![cfg_attr(test, feature(os))]
