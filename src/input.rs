@@ -307,17 +307,15 @@ mod test {
     });
 
     // receive key outputs and match with expectations
-    let timeout_at = time::get_time() + Duration::milliseconds(100);
+    let (timeout_tx, timeout_rx) = channel();
+    thread::spawn(move || {
+      thread::sleep(Duration::milliseconds(100)); timeout_tx.send(()).ok();
+    });
     for output in outputs.iter() {
-      // just keep looping until the key arrives
-      loop {
-        match key_rx.try_recv() {
-          Ok(key) => { assert_eq!(key, *output); break; }
-          _       => (),
-        }
-        let time_now = time::get_time();
-        if time_now > timeout_at { panic!("Timeout waiting for key event."); }
-      }
+      select!(
+        key = key_rx.recv()   => { assert_eq!(key.unwrap(), *output); },
+        _ = timeout_rx.recv() => { panic!("Timeout waiting for key event."); }
+      );
     }
   }
 }
