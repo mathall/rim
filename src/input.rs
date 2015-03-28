@@ -104,23 +104,23 @@ fn input_loop(kill_rx: Receiver<()>, died_tx: Sender<()>,
     // empty the fd, translating and sending key events
     loop {
       match tk.getkey() {
-        TermKeyResult::None_        => break,  // got nothing, done here
-        TermKeyResult::Eof          =>
+        TermKeyResult::None_      => break,  // got nothing, done here
+        TermKeyResult::Eof        =>
           panic!("stdin closed, you're on your own."),
-        TermKeyResult::Error{errno} =>
-          panic!("termkey::geykey failed with error code {}", errno),
-        TermKeyResult::Key(key)     => translate_key(key),
-        TermKeyResult::Again        =>
+        TermKeyResult::Error{err} =>
+          panic!("termkey::geykey failed with error code {}", err),
+        TermKeyResult::Key(key)   => translate_key(key),
+        TermKeyResult::Again      =>
           // There's input available, but not enough to make a key event. Likely
           // escape has been pushed, which we want to force out and interpret as
           // a key on its own, otherwise oops.
           match tk.getkey_force() {
-            TermKeyResult::Key(key)     => translate_key(key),
-            TermKeyResult::Eof          =>
+            TermKeyResult::Key(key)   => translate_key(key),
+            TermKeyResult::Eof        =>
               panic!("stdin closed, you're on your own."),
-            TermKeyResult::Error{errno} =>
-              panic!("termkey::geykey_force failed with error code {}", errno),
-            _                           => unreachable!(),
+            TermKeyResult::Error{err} =>
+              panic!("termkey::geykey_force failed with error code {}", err),
+            _                         => unreachable!(),
           },
       }.map(|key| key_tx.send(key));
     }
