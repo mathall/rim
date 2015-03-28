@@ -8,7 +8,6 @@
 
 use std::collections::{HashMap, VecDeque, VecMap};
 use std::mem;
-use std::old_io::Timer;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
 use std::time::Duration;
@@ -88,14 +87,17 @@ pub fn start(cmd_tx: Sender<Cmd>) -> CmdThread {
 
 fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
               cmd_tx: Sender<Cmd>) {
-  // timer::oneshot drops the sending end once it's done with it, dooming the
-  // receiving end to an endless stream of RecvError. Instead, set up a channel
-  // we can rely on, and handle the timer on a helper thread.
+  // Set up a helper thread along with communication channels for handling
+  // timeout requests.
   let (timeout_tx, timeout_rx) = channel();
   let (oneshot_tx, oneshot_rx) = channel();
   thread::spawn(move || {
-    let mut timer = Timer::new().unwrap();
-    let mut timeout = timer.oneshot(Duration::milliseconds(TIMEOUT));
+    let oneshot = |duration: Duration| -> Receiver<()> {
+      let (tx, rx) = channel();
+      thread::spawn(move || { thread::sleep(duration); tx.send(()).ok(); });
+      return rx;
+    };
+    let mut timeout = oneshot(Duration::milliseconds(TIMEOUT));
     let mut response = None;
     loop {
       select!(
@@ -108,7 +110,7 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
           _     => break,
         }
       );
-      timeout = timer.oneshot(Duration::milliseconds(TIMEOUT));
+      timeout = oneshot(Duration::milliseconds(TIMEOUT));
     }
   });
 
@@ -366,7 +368,6 @@ mod test {
             C: Fn(super::Cmd, &super::CmdThread) -> () {
     use std::sync::mpsc::channel;
     use std::time::duration::Duration;
-    use std::old_io::Timer;
     use std::thread;
 
     // set up communication channels
@@ -387,16 +388,18 @@ mod test {
     });
 
     // receive commands and match with expectations
-    let mut timer = Timer::new().unwrap();
-    let timeout = timer.oneshot(Duration::milliseconds(1000));
+    let (timeout_tx, timeout_rx) = channel();
+    thread::spawn(move || {
+      thread::sleep(Duration::milliseconds(1000)); timeout_tx.send(()).ok();
+    });
     for output in outputs.iter() {
       select!(
-        cmd = cmd_rx.recv() => {
+        cmd = cmd_rx.recv()   => {
           assert_eq!(cmd.unwrap(), *output);
           callback(cmd.unwrap(), &cmd_thread);
           cmd_thread.ack_cmd().unwrap();
         },
-        _ = timeout.recv() => { panic!("Timeout waiting for command."); }
+        _ = timeout_rx.recv() => { panic!("Timeout waiting for command."); }
       );
     }
   }

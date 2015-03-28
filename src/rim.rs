@@ -11,14 +11,12 @@
 #![feature(int_uint)]
 #![feature(io)]
 #![feature(libc)]
-#![feature(old_io)]
 #![feature(path)]
 #![feature(rustc_private)]
 #![feature(std_misc)]
 #![feature(str_char)]
+#![feature(thread_sleep)]
 #![feature(unicode)]
-
-#![cfg_attr(test, feature(thread_sleep))]
 
 #[macro_use]
 extern crate bitflags;
