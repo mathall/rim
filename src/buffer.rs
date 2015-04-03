@@ -6,6 +6,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+extern crate core;
+
 use std::cmp;
 use std::error;
 use std::fmt;
@@ -593,9 +595,10 @@ impl Iterator for PageStream {
   type Item = Page;
 
   fn next(&mut self) -> Option<Page> {
+    use self::core::ops::DerefMut;
     use std::io::SeekFrom;
     let mut data = Box::new([0; PAGE_SIZE]);
-    self.file.read(data.as_mut_slice()).
+    self.file.read(data.deref_mut()).
     and_then(|bytes| if bytes == 0 { Ok(None) } else {
       let (string, num_truncated_bytes) =
         PageStream::raw_data_to_utf8_string(&(*data)[0..bytes]);
