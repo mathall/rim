@@ -484,12 +484,12 @@ impl Page {
     unsafe {
       let bytes_mut = self.data.as_mut_vec().as_mut_ptr();
       // make place by shifting some original data to the side
-      ptr::copy(bytes_mut.offset(byte_offset + string_size as int),
-                self.data.as_bytes().as_ptr().offset(byte_offset),
+      ptr::copy(self.data.as_bytes().as_ptr().offset(byte_offset),
+                bytes_mut.offset(byte_offset + string_size as int),
                 original_size - byte_offset as uint);
       // plunk that chunk in there
-      ptr::copy(bytes_mut.offset(byte_offset),
-                string.as_bytes().as_ptr(),
+      ptr::copy(string.as_bytes().as_ptr(),
+                bytes_mut.offset(byte_offset),
                 string_size);
     }
     self.update_caches();
