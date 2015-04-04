@@ -13,7 +13,6 @@
 #![feature(slice_patterns)]
 #![feature(std_misc)]
 #![feature(str_char)]
-#![feature(thread_sleep)]
 #![feature(unicode)]
 
 #[macro_use]

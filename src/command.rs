@@ -10,16 +10,15 @@ use std::collections::{HashMap, VecDeque, VecMap};
 use std::mem;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
-use std::time::Duration;
 
 use frame;
 use keymap;
 use view;
 
 #[cfg(not(test))]
-const TIMEOUT: i64 = 3000;
+const TIMEOUT: u32 = 3000;
 #[cfg(test)]
-const TIMEOUT: i64 = 100;
+const TIMEOUT: u32 = 100;
 
 /*
  * CmdThread is the interface for instructing the command thread. It is returned
@@ -92,12 +91,12 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
   let (timeout_tx, timeout_rx) = channel();
   let (oneshot_tx, oneshot_rx) = channel();
   thread::spawn(move || {
-    let oneshot = |duration: Duration| -> Receiver<()> {
+    let oneshot = |ms: u32| -> Receiver<()> {
       let (tx, rx) = channel();
-      thread::spawn(move || { thread::sleep(duration); tx.send(()).ok(); });
+      thread::spawn(move || { thread::sleep_ms(ms); tx.send(()).ok(); });
       return rx;
     };
-    let mut timeout = oneshot(Duration::milliseconds(TIMEOUT));
+    let mut timeout = oneshot(TIMEOUT);
     let mut response = None;
     loop {
       select!(
@@ -110,7 +109,7 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
           _     => break,
         }
       );
-      timeout = oneshot(Duration::milliseconds(TIMEOUT));
+      timeout = oneshot(TIMEOUT);
     }
   });
 
@@ -364,7 +363,6 @@ mod test {
       where S: Fn(&super::CmdThread) -> (),
             C: Fn(super::Cmd, &super::CmdThread) -> () {
     use std::sync::mpsc::channel;
-    use std::time::Duration;
     use std::thread;
 
     // set up communication channels
@@ -380,14 +378,14 @@ mod test {
     thread::spawn(move || {
       for keys in inputs.iter() {
         for key in keys.iter() { key_tx.send(*key).unwrap(); }
-        thread::sleep(Duration::milliseconds(super::TIMEOUT + 10));
+        thread::sleep_ms(super::TIMEOUT + 10);
       }
     });
 
     // receive commands and match with expectations
     let (timeout_tx, timeout_rx) = channel();
     thread::spawn(move || {
-      thread::sleep(Duration::milliseconds(1000)); timeout_tx.send(()).ok();
+      thread::sleep_ms(1000); timeout_tx.send(()).ok();
     });
     for output in outputs.iter() {
       select!(
