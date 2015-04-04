@@ -8,7 +8,6 @@
 
 #![feature(collections)]
 #![feature(core)]
-#![feature(io)]
 #![feature(libc)]
 #![feature(rustc_private)]
 #![feature(slice_patterns)]
