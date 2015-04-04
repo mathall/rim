@@ -13,7 +13,7 @@ use std::cmp;
 use std::iter;
 use std::ops::{Add, Sub};
 
-#[derive(Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Size(pub u16, pub u16);
 
 #[cfg(not(test))]
@@ -23,7 +23,7 @@ impl Size {
   }
 }
 
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Cell(pub u16, pub u16);
 
 #[cfg(not(test))]
@@ -58,7 +58,7 @@ impl Sub for Cell {
   }
 }
 
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 pub struct Rect(pub Cell, pub Size);
 
 impl Rect {

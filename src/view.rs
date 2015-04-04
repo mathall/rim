@@ -14,7 +14,7 @@ use screen;
 
 const MIN_VIEW_SIZE: u16 = 1;
 
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum CaretMovement {
   LineUp,

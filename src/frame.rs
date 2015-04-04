@@ -101,7 +101,7 @@ enum SectionSide {
  * May represent the orientation of a split or an operation to carry out on the
  * section tree.
  */
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum Orientation {
   Vertical,
@@ -587,7 +587,7 @@ impl<'l> Iterator for LeafSectionIterator<'l> {
 /*
  * The various errors that may result from usage of the frame.
  */
-#[derive(Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FrameError {
   NoSuchWindow,
   CantCloseLastWindow,
@@ -621,7 +621,7 @@ impl error::Error for FrameError {
 
 type FrameResult<T> = Result<T, FrameError>;
 
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum Direction {
   Left,
@@ -630,7 +630,7 @@ pub enum Direction {
   Down,
 }
 
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum WindowOrder {
   NextWindow,

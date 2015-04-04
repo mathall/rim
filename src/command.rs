@@ -322,7 +322,7 @@ impl Clone for Keychain {
 /*
  * Commands for rim.
  */
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum Cmd {
@@ -340,7 +340,7 @@ pub enum Cmd {
 /*
  * Commands intended for the focused window.
  */
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum WinCmd {
