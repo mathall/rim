@@ -45,7 +45,7 @@ pub struct CmdThread {
 }
 
 impl CmdThread {
-  pub fn set_mode(&self, mode: Mode, num: uint) -> Result<(), ()> {
+  pub fn set_mode(&self, mode: Mode, num: usize) -> Result<(), ()> {
     self.msg_tx.send(Msg::SetMode(mode, num)).map_err(|_| ())
   }
 
@@ -71,7 +71,7 @@ impl Drop for CmdThread {
  * Messages used by CmdThread to instruct the command thread.
  */
 enum Msg {
-  SetMode(Mode, uint),
+  SetMode(Mode, usize),
   SetKeyRx(Receiver<keymap::Key>),
   AckCmd,
 }
@@ -125,8 +125,8 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
   // unprocessed keys along with sequence numbers for the first key to be
   // processed (front) and one beyond the last arrived key (back)
   let mut keys = VecDeque::new();
-  let mut back_seq = 0u;
-  let mut front_seq = 0u;
+  let mut back_seq: usize = 0;
+  let mut front_seq: usize = 0;
 
   // modes used to make commands out of a stream of keys, a higher index/key
   // implies higher priority
@@ -164,17 +164,16 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
 
     // work through the arrived keys
     while keys.len() > 0 {
-      // determine whether to drain some keys
-      let drain_amount = drain_seq as int - front_seq as int;
-      let drain = drain_amount > 0;
+      assert!(back_seq >= front_seq && back_seq >= drain_seq);
+      // determine amount of keys to consider and whether to drain those keys
+      let drain = drain_seq > front_seq;
+      let num_keys = if drain { drain_seq } else { back_seq } - front_seq;
       // match keys with modes in priority order
       let mut match_result = MatchResult::None;
       for (_, mode) in modes.iter().rev() {
         // first match by keychain
         match_result =
-          if drain { mode.keychain.match_keys(
-                       &mut keys.iter().take(drain_amount as uint), drain) }
-          else     { mode.keychain.match_keys(&mut keys.iter(), drain) };
+          mode.keychain.match_keys(&mut keys.iter().take(num_keys), drain);
         // use the mode's fallback if the keychain didn't match anything
         if match_result == MatchResult::None {
           (mode.fallback)(keys[0]).map(|cmd|
@@ -235,8 +234,8 @@ impl Mode {
 #[cfg_attr(test, derive(Debug))]
 enum MatchResult {
   None,
-  Partial(uint),
-  Complete(Cmd, uint),
+  Partial(usize),
+  Complete(Cmd, usize),
 }
 
 /*

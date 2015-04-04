@@ -190,14 +190,14 @@ impl ScreenBuffer {
   }
 
   fn resize(&mut self, Size(rows, cols): Size) {
-    let size = rows as uint * cols as uint;
-    let diff = size as int - self.cells.len() as int;
-    if diff > 0 {
-      self.cells.reserve_exact(size);
-      self.cells.extend(iter::repeat(None).take(diff as uint))
+    let current_size = self.cells.len();
+    let new_size = rows as usize * cols as usize;
+    if new_size > current_size {
+      self.cells.reserve_exact(new_size);
+      self.cells.extend(iter::repeat(None).take(new_size - current_size))
     }
-    else if diff < 0 {
-      self.cells.truncate(size);
+    else if current_size > new_size {
+      self.cells.truncate(new_size);
       self.cells.shrink_to_fit();
     }
     self.width = cols;
@@ -214,7 +214,7 @@ impl ScreenBuffer {
   fn update(&mut self, Cell(row, col): Cell, character: char, fg: Color,
       bg: Color) -> bool {
     let cell = Some((character, fg, bg));
-    let idx = (row as uint * self.width as uint) + col as uint;
+    let idx = (row as usize * self.width as usize) + col as usize;
     let buffer_size = self.cells.len();
     let nones = || (1..character.width(false).unwrap_or(1)).
                    map(|i| idx + i).filter(|i| *i < buffer_size);

@@ -75,7 +75,7 @@ mod libc_poll {
     Timeout,
   }
 
-  pub fn poll_fd(fd: c_int, timeout_ms: int) -> PollResult {
+  pub fn poll_fd(fd: c_int, timeout_ms: u16) -> PollResult {
     const POLLIN: c_short = 1;
     let mut pollfd = Pollfd { fd: fd, events: POLLIN, revents: 0 };
     let num_fds = 1;

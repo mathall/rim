@@ -8,7 +8,6 @@
 
 #![feature(collections)]
 #![feature(core)]
-#![feature(int_uint)]
 #![feature(io)]
 #![feature(libc)]
 #![feature(rustc_private)]
@@ -119,7 +118,7 @@ impl Rim {
     ok().expect("Failed to split window.");
   }
 
-  fn resize_window(&mut self, orientation: frame::Orientation, amount: int) {
+  fn resize_window(&mut self, orientation: frame::Orientation, amount: isize) {
     self.frame.resize_window(&self.frame_ctx, &self.focus, orientation, amount).
     map(|absorbed| if absorbed != 0 { self.invalidate_frame(); }).
     ok().expect("Failed to resize window");
