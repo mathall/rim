@@ -37,7 +37,7 @@ impl SectionPath {
     SectionPath(VecDeque::new())
   }
 
-  fn len(&self) -> uint {
+  fn len(&self) -> usize {
     let &SectionPath(ref internals) = self;
     internals.len()
   }
@@ -54,7 +54,7 @@ impl SectionPath {
     SectionPath(internals)
   }
 
-  fn remove(&mut self, idx: uint) {
+  fn remove(&mut self, idx: usize) {
     let &mut SectionPath(ref mut internals) = self;
     internals.remove(idx);
   }
@@ -101,7 +101,7 @@ enum SectionSide {
  * May represent the orientation of a split or an operation to carry out on the
  * section tree.
  */
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum Orientation {
   Vertical,
@@ -274,7 +274,7 @@ impl Section {
         let screen::Size(rows, cols) = either.size;
         let size = if split.orientation == Vertical { cols } else { rows };
         let shift = if side == Fst { -1 } else { 1 } *
-          (BORDER_SIZE as int + size as int);
+          (BORDER_SIZE as isize + size as isize);
         other.shift_edge(split.orientation.opposite(), side, shift);
         assert_eq!(self.size, other.size);
         mem::replace(&mut other.split, None) }) });
@@ -398,7 +398,7 @@ impl Section {
   // Attempts to shift the split of the section defined by |path| by |amount|.
   // A negative amount implies shifting in the top/left direction.
   // Returns the absorbed amount.
-  fn shift_split<'l, It>(&mut self, path: &mut It, amount: int) -> int
+  fn shift_split<'l, It>(&mut self, path: &mut It, amount: isize) -> isize
       where It: Iterator<Item=&'l SectionSide> {
     path.next().
     map(|&go|
@@ -434,9 +434,9 @@ impl Section {
   // A negative amount implies shifting in the top/left direction.
   // Returns the absorbed amount.
   fn shift_edge(&mut self, orientation: Orientation, side: SectionSide,
-                amount: int) -> int {
+                amount: isize) -> isize {
     let screen::Size(rows, cols) = self.size;
-    let size = if orientation == Vertical { rows } else { cols } as int;
+    let size = if orientation == Vertical { rows } else { cols } as isize;
 
     // let the subsections absorb the amount by shifting them first, then
     // set the size of self according to how much was absorbed
@@ -448,8 +448,8 @@ impl Section {
           amount
         }
         else {
-          if amount > 0 { cmp::min(amount, size - MIN_SECTION_SIZE as int) }
-          else          { cmp::max(amount, MIN_SECTION_SIZE as int - size) }
+          if amount > 0 { cmp::min(amount, size - MIN_SECTION_SIZE as isize) }
+          else          { cmp::max(amount, MIN_SECTION_SIZE as isize - size) }
         },
       Some(ref mut split) =>
         if split.orientation == orientation {
@@ -587,7 +587,7 @@ impl<'l> Iterator for LeafSectionIterator<'l> {
 /*
  * The various errors that may result from usage of the frame.
  */
-#[derive(Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum FrameError {
   NoSuchWindow,
   CantCloseLastWindow,
@@ -621,7 +621,7 @@ impl error::Error for FrameError {
 
 type FrameResult<T> = Result<T, FrameError>;
 
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum Direction {
   Left,
@@ -630,7 +630,7 @@ pub enum Direction {
   Down,
 }
 
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum WindowOrder {
   NextWindow,
@@ -710,7 +710,7 @@ impl Frame {
       if size < min_size {
         // try to resize the window to fit the split
         let grow_orientation = orientation.opposite();
-        let increase = min_size as int - size as int;
+        let increase = min_size as isize - size as isize;
         let resized =
           self.resize_window(ctx, window, grow_orientation, increase).unwrap();
         if resized < increase {
@@ -761,7 +761,7 @@ impl Frame {
           if reset_orientation == Vertical { (section_rows, frame_rows) }
           else                             { (section_cols, frame_cols) };
         if section_size > frame_size {
-          let size_diff = frame_size as int - section_size as int;
+          let size_diff = frame_size as isize - section_size as isize;
           self.main_section.shift_edge(reset_orientation, Snd, size_diff);
         }
         else {
@@ -836,8 +836,8 @@ impl Frame {
   // wasn't enough space for the desired resize-amount.
   // Returns the amount the resize was able to absorb.
   pub fn resize_window(&mut self, ctx: &FrameContext, window: &WindowId,
-                       orientation: Orientation, amount: int)
-      -> FrameResult<int> {
+                       orientation: Orientation, amount: isize)
+      -> FrameResult<isize> {
     ctx.get_section_path(window).
     map(|path| {
       let clamped_amount = if amount > 0 { amount } else {
@@ -845,7 +845,7 @@ impl Frame {
           self.get_section_rect(path);
         let size = if orientation == Vertical { rows } else { cols };
         let min_size = self.window_min_size(ctx, window, orientation);
-        cmp::max(amount, min_size as int - size as int)
+        cmp::max(amount, min_size as isize - size as isize)
       };
       let snd_took = self.resize_section_recursive(
         path, orientation, Snd, clamped_amount);
@@ -876,7 +876,7 @@ impl Frame {
   // Returns the amount the resize was able to absorb.
   fn resize_section_recursive(&mut self, path: &SectionPath,
                               orientation: Orientation, side: SectionSide,
-                              amount: int) -> int {
+                              amount: isize) -> isize {
     self.resize_section(path, orientation, side, amount).
     map(|(absorbed, ancestor_path)|
       if absorbed == amount { absorbed } else {
@@ -897,8 +897,8 @@ impl Frame {
   // Returns the amount the resize was able to absorb along with the path to the
   // relevant ancestor.
   fn resize_section(&mut self, path: &SectionPath, orientation: Orientation,
-                    side: SectionSide, amount: int)
-      -> Option<(int, SectionPath)> {
+                    side: SectionSide, amount: isize)
+      -> Option<(isize, SectionPath)> {
     self.main_section.get_adjacent(&mut path.iter(), orientation, side).
     map(|adjacent_path| path.common_base(&adjacent_path)).
     map(|base_path| {
@@ -913,9 +913,9 @@ impl Frame {
   pub fn set_size(&mut self, size: screen::Size) {
     let screen::Size(new_rows, new_cols) = size;
     let screen::Size(section_rows, section_cols) = self.main_section.size;
-    let row_diff = new_rows as int - section_rows as int;
+    let row_diff = new_rows as isize - section_rows as isize;
     self.main_section.shift_edge(Vertical, Snd, row_diff);
-    let col_diff = new_cols as int - section_cols as int;
+    let col_diff = new_cols as isize - section_cols as isize;
     self.main_section.shift_edge(Horizontal, Snd, col_diff);
     self.size = size;
   }
@@ -1061,7 +1061,7 @@ mod test {
   // Starting with one window and assigning it the number 0 then splitting
   // sequentially and assigning each new window the next number results in the
   // frames and section trees depicted along with the split descriptors below.
-  const SPLIT_DESCRIPTORS: &'static [&'static  [(uint, super::Orientation)]] =
+  const SPLIT_DESCRIPTORS: &'static [&'static  [(usize, super::Orientation)]] =
     &[
       // -----------------                     V
       // |     0     |   |                    / \
@@ -1106,7 +1106,7 @@ mod test {
         (1, Vertical), (3, Vertical), (2, Vertical)],
     ];
 
-  fn setup_frame(descriptor_nr: uint)
+  fn setup_frame(descriptor_nr: usize)
       -> (super::Frame, super::FrameContext, Vec<super::WindowId>) {
     let mut windows = Vec::new();
     let (mut frame, mut ctx, main_window) = super::Frame::new();
@@ -1130,7 +1130,7 @@ mod test {
   fn split_and_close() {
     for descriptor_nr in 0..SPLIT_DESCRIPTORS.len() {
       let num_windows = SPLIT_DESCRIPTORS[descriptor_nr].len() + 1;
-      let window_nrs: Vec<uint> = (0..num_windows).collect();
+      let window_nrs: Vec<usize> = (0..num_windows).collect();
       for window_nrs in window_nrs.permutations().take(100) {
         let (mut frame, mut ctx, windows) = setup_frame(descriptor_nr);
         let close_last = window_nrs[0];
@@ -1303,7 +1303,7 @@ mod test {
 
     let win6_resize = win2_rows as i16 + 5;
     let win2_resize = super::MIN_SECTION_SIZE as i16 - win2_rows as i16;
-    let resize = (6, Vertical, win6_resize as int);
+    let resize = (6, Vertical, win6_resize as isize);
     let mut window_changes = VecMap::new();
     window_changes.insert(2, win2_resize);
     window_changes.insert(3, -win2_resize);
@@ -1390,7 +1390,7 @@ mod test {
     let win3_min_size = 3 * super::MIN_SECTION_SIZE + 2 * super::BORDER_SIZE;
 
     let win3_resize = win3_min_size as i16 - win3_rows as i16;
-    let resize = (3, Vertical, win3_resize as int);
+    let resize = (3, Vertical, win3_resize as isize);
     let mut window_changes = VecMap::new();
     window_changes.insert(2, -win3_resize);
     window_changes.insert(3, win3_resize);
@@ -1414,7 +1414,7 @@ mod test {
                       windows: &Vec<super::WindowId>,
                       window_changes: &VecMap<i16>,
                       (win, orientation, amount):
-                        (uint, super::Orientation, int)) {
+                        (usize, super::Orientation, isize)) {
     // calculate and collect expected sizes after resizing a window
     let expectations: Vec<(super::WindowId, screen::Size)> =
       (0..windows.len()).map(|win| {
@@ -1466,8 +1466,8 @@ mod test {
       frame.get_closest_neighbouring_window(&ctx, &main_window));
   }
 
-  fn try_closest_neighbours(frame_num: uint,
-                            closest_neighbours: &[(uint, uint)]) {
+  fn try_closest_neighbours(frame_num: usize,
+                            closest_neighbours: &[(usize, usize)]) {
     let (frame, ctx, windows) = setup_frame(frame_num);
     for &(win, neighbour) in closest_neighbours.iter() {
       assert_eq!(windows[neighbour],
@@ -1490,7 +1490,7 @@ mod test {
     try_window_sequence(2, &[0, 4, 1, 5, 3, 6, 2, 7]);
   }
 
-  fn try_window_sequence(frame_num: uint, sequence: &[uint]) {
+  fn try_window_sequence(frame_num: usize, sequence: &[usize]) {
     let (frame, ctx, windows) = setup_frame(frame_num);
 
     let first_window = windows[sequence[0]].clone();
@@ -1574,10 +1574,10 @@ mod test {
 
   fn try_adjacent_windows(frame: &super::Frame, ctx: &super::FrameContext,
                           windows: &Vec<super::WindowId>,
-                          adjacencies: &[(uint, Option<uint>, Option<uint>,
-                                          Option<uint>, Option<uint>)]) {
+                          adjacencies: &[(usize, Option<usize>, Option<usize>,
+                                          Option<usize>, Option<usize>)]) {
     let err = super::FrameError::NoSuchAdjacentWindow;
-    let expectation_as_frame_result = |opt: Option<uint>|
+    let expectation_as_frame_result = |opt: Option<usize>|
       opt.map(|adj| windows[adj].clone()).ok_or(err);
     for &(win, left, right, up, down) in adjacencies.iter() {
       assert_eq!(expectation_as_frame_result(left),

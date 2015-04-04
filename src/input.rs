@@ -75,7 +75,7 @@ mod libc_poll {
     Timeout,
   }
 
-  pub fn poll_fd(fd: c_int, timeout_ms: int) -> PollResult {
+  pub fn poll_fd(fd: c_int, timeout_ms: u16) -> PollResult {
     const POLLIN: c_short = 1;
     let mut pollfd = Pollfd { fd: fd, events: POLLIN, revents: 0 };
     let num_fds = 1;
@@ -231,7 +231,6 @@ mod test {
   use std::mem;
   use std::sync::mpsc::{channel, Sender};
   use std::thread;
-  use std::time::Duration;
 
   use keymap;
 
@@ -297,7 +296,7 @@ mod test {
         }
 
         // give termkey a chance to parse escape as a standalone key
-        thread::sleep(Duration::milliseconds(1));
+        thread::sleep_ms(1);
       }
       // keep the pipe alive until we're finished with it
       close_writer_rx.recv().unwrap();
@@ -306,9 +305,7 @@ mod test {
 
     // receive key outputs and match with expectations
     let (timeout_tx, timeout_rx) = channel();
-    thread::spawn(move || {
-      thread::sleep(Duration::milliseconds(100)); timeout_tx.send(()).ok();
-    });
+    thread::spawn(move || { thread::sleep_ms(100); timeout_tx.send(()).ok(); });
     for output in outputs.iter() {
       select!(
         key = key_rx.recv()   => { assert_eq!(key.unwrap(), *output); },

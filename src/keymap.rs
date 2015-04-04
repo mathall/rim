@@ -13,15 +13,15 @@
  *   - Unicode codepoint such as a, ä, or あ
  * The key also records key modifier information.
  */
-#[derive(Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum Key {
-  Fn{num: int, mods: KeyMod},
+  Fn{num: isize, mods: KeyMod},
   Sym{sym: KeySym, mods: KeyMod},
   Unicode{codepoint: char, mods: KeyMod},
 }
 
-#[derive(Copy, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Eq, Hash, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum KeySym
 {

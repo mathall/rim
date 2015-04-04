@@ -10,16 +10,15 @@ use std::collections::{HashMap, VecDeque, VecMap};
 use std::mem;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
-use std::time::Duration;
 
 use frame;
 use keymap;
 use view;
 
 #[cfg(not(test))]
-const TIMEOUT: i64 = 3000;
+const TIMEOUT: u32 = 3000;
 #[cfg(test)]
-const TIMEOUT: i64 = 100;
+const TIMEOUT: u32 = 100;
 
 /*
  * CmdThread is the interface for instructing the command thread. It is returned
@@ -45,7 +44,7 @@ pub struct CmdThread {
 }
 
 impl CmdThread {
-  pub fn set_mode(&self, mode: Mode, num: uint) -> Result<(), ()> {
+  pub fn set_mode(&self, mode: Mode, num: usize) -> Result<(), ()> {
     self.msg_tx.send(Msg::SetMode(mode, num)).map_err(|_| ())
   }
 
@@ -71,7 +70,7 @@ impl Drop for CmdThread {
  * Messages used by CmdThread to instruct the command thread.
  */
 enum Msg {
-  SetMode(Mode, uint),
+  SetMode(Mode, usize),
   SetKeyRx(Receiver<keymap::Key>),
   AckCmd,
 }
@@ -92,12 +91,12 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
   let (timeout_tx, timeout_rx) = channel();
   let (oneshot_tx, oneshot_rx) = channel();
   thread::spawn(move || {
-    let oneshot = |duration: Duration| -> Receiver<()> {
+    let oneshot = |ms: u32| -> Receiver<()> {
       let (tx, rx) = channel();
-      thread::spawn(move || { thread::sleep(duration); tx.send(()).ok(); });
+      thread::spawn(move || { thread::sleep_ms(ms); tx.send(()).ok(); });
       return rx;
     };
-    let mut timeout = oneshot(Duration::milliseconds(TIMEOUT));
+    let mut timeout = oneshot(TIMEOUT);
     let mut response = None;
     loop {
       select!(
@@ -110,7 +109,7 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
           _     => break,
         }
       );
-      timeout = oneshot(Duration::milliseconds(TIMEOUT));
+      timeout = oneshot(TIMEOUT);
     }
   });
 
@@ -125,8 +124,8 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
   // unprocessed keys along with sequence numbers for the first key to be
   // processed (front) and one beyond the last arrived key (back)
   let mut keys = VecDeque::new();
-  let mut back_seq = 0u;
-  let mut front_seq = 0u;
+  let mut back_seq: usize = 0;
+  let mut front_seq: usize = 0;
 
   // modes used to make commands out of a stream of keys, a higher index/key
   // implies higher priority
@@ -164,17 +163,16 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
 
     // work through the arrived keys
     while keys.len() > 0 {
-      // determine whether to drain some keys
-      let drain_amount = drain_seq as int - front_seq as int;
-      let drain = drain_amount > 0;
+      assert!(back_seq >= front_seq && back_seq >= drain_seq);
+      // determine amount of keys to consider and whether to drain those keys
+      let drain = drain_seq > front_seq;
+      let num_keys = if drain { drain_seq } else { back_seq } - front_seq;
       // match keys with modes in priority order
       let mut match_result = MatchResult::None;
       for (_, mode) in modes.iter().rev() {
         // first match by keychain
         match_result =
-          if drain { mode.keychain.match_keys(
-                       &mut keys.iter().take(drain_amount as uint), drain) }
-          else     { mode.keychain.match_keys(&mut keys.iter(), drain) };
+          mode.keychain.match_keys(&mut keys.iter().take(num_keys), drain);
         // use the mode's fallback if the keychain didn't match anything
         if match_result == MatchResult::None {
           (mode.fallback)(keys[0]).map(|cmd|
@@ -235,8 +233,8 @@ impl Mode {
 #[cfg_attr(test, derive(Debug))]
 enum MatchResult {
   None,
-  Partial(uint),
-  Complete(Cmd, uint),
+  Partial(usize),
+  Complete(Cmd, usize),
 }
 
 /*
@@ -324,7 +322,7 @@ impl Clone for Keychain {
 /*
  * Commands for rim.
  */
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum Cmd {
@@ -342,7 +340,7 @@ pub enum Cmd {
 /*
  * Commands intended for the focused window.
  */
-#[derive(Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum WinCmd {
@@ -365,7 +363,6 @@ mod test {
       where S: Fn(&super::CmdThread) -> (),
             C: Fn(super::Cmd, &super::CmdThread) -> () {
     use std::sync::mpsc::channel;
-    use std::time::Duration;
     use std::thread;
 
     // set up communication channels
@@ -381,14 +378,14 @@ mod test {
     thread::spawn(move || {
       for keys in inputs.iter() {
         for key in keys.iter() { key_tx.send(*key).unwrap(); }
-        thread::sleep(Duration::milliseconds(super::TIMEOUT + 10));
+        thread::sleep_ms(super::TIMEOUT + 10);
       }
     });
 
     // receive commands and match with expectations
     let (timeout_tx, timeout_rx) = channel();
     thread::spawn(move || {
-      thread::sleep(Duration::milliseconds(1000)); timeout_tx.send(()).ok();
+      thread::sleep_ms(1000); timeout_tx.send(()).ok();
     });
     for output in outputs.iter() {
       select!(

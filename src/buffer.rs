@@ -6,6 +6,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+extern crate core;
+
 use std::cmp;
 use std::error;
 use std::fmt;
@@ -13,19 +15,18 @@ use std::fs::File;
 use std::io;
 use std::io::{Seek, Read, Write};
 use std::mem;
-use std::num::SignedInt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
 use self::PageTreeNode::*;
 
 #[cfg(not(test))]
-const PAGE_SIZE: uint = 1024;  // ish
+const PAGE_SIZE: usize = 1024;  // ish
 #[cfg(test)]
-const PAGE_SIZE: uint = 16;
+const PAGE_SIZE: usize = 16;
 
 // a rather soft limit where it's good time to split a page in two
-const MAX_PAGE_SIZE: uint = (PAGE_SIZE as f32 * 1.5) as uint;
+const MAX_PAGE_SIZE: usize = (PAGE_SIZE as f64 * 1.5) as usize;
 
 /*
  * File contents when stored in memory is paginated for quick modification.
@@ -53,7 +54,7 @@ impl PageTreeNode {
     }
   }
 
-  fn length(&self) -> uint {
+  fn length(&self) -> usize {
     match *self {
       Nil            => 0,
       Tree(ref tree) => tree.length,
@@ -61,7 +62,7 @@ impl PageTreeNode {
     }
   }
 
-  fn newlines(&self) -> uint {
+  fn newlines(&self) -> usize {
     match *self {
       Nil            => 0,
       Tree(ref tree) => tree.newlines,
@@ -69,7 +70,7 @@ impl PageTreeNode {
     }
   }
 
-  fn height(&self) -> uint {
+  fn height(&self) -> usize {
     match *self {
       Nil            => 0,
       Tree(ref tree) => tree.height,
@@ -81,9 +82,9 @@ impl PageTreeNode {
 struct PageTree {
   left: PageTreeNode,
   right: PageTreeNode,
-  length: uint,  // cached length of pages down the subtrees
-  newlines: uint,  // cached numer of newlines in the pages down the subtrees
-  height: uint,  // cached height of the tree
+  length: usize,  // cached length of pages down the subtrees
+  newlines: usize,  // cached numer of newlines in the pages down the subtrees
+  height: usize,  // cached height of the tree
 }
 
 impl PageTree {
@@ -99,7 +100,7 @@ impl PageTree {
 
   // See comment for offset_of_line_start and add to that quirk the requirement
   // that |column| == 0.
-  fn line_column_to_offset(&self, line: uint, column: uint) -> Option<uint> {
+  fn line_column_to_offset(&self, line: usize, column: usize) -> Option<usize> {
     self.line_start_and_end_offset(line).and_then(
       |(line_start_offset, line_end_offset)| {
         let line_length = line_end_offset - line_start_offset;
@@ -109,7 +110,7 @@ impl PageTree {
   }
 
   // end may equal start if the file is empty
-  fn line_start_and_end_offset(&self, line: uint) -> Option<(uint, uint)> {
+  fn line_start_and_end_offset(&self, line: usize) -> Option<(usize, usize)> {
     self.offset_of_line_start(line).map(
       |line_start_offset| {
         let line_end_offset =
@@ -124,7 +125,7 @@ impl PageTree {
   //  * L == N+1 and line N ended with a newline
   // where L is the zero-indexed line number being sought for and N is the
   // number of newlines in the file.
-  fn offset_of_line_start(&self, line: uint) -> Option<uint> {
+  fn offset_of_line_start(&self, line: usize) -> Option<usize> {
     let (go_left, new_line) = self.decide_branch_by_line(line);
     let (branch, other) = if go_left { (&self.left, &self.right) }
                           else       { (&self.right, &self.left) };
@@ -137,12 +138,13 @@ impl PageTree {
     }.map(|offset| offset + if go_left { 0 } else { other.length() })
   }
 
-  fn get_char_by_line_column(&self, line: uint, column: uint) -> Option<char> {
+  fn get_char_by_line_column(&self, line: usize, column: usize)
+      -> Option<char> {
     self.line_column_to_offset(line, column).and_then(
       |offset| self.get_char_by_offset(offset))
   }
 
-  fn get_char_by_offset(&self, offset: uint) -> Option<char> {
+  fn get_char_by_offset(&self, offset: usize) -> Option<char> {
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
     match if go_left { &self.left } else { &self.right } {
       &Nil            => None,
@@ -151,7 +153,7 @@ impl PageTree {
     }
   }
 
-  fn insert_string_at_offset(&mut self, string: String, offset: uint) {
+  fn insert_string_at_offset(&mut self, string: String, offset: usize) {
     // We may only split a page once, otherwise rebalancing may not be possible
     // while returning. Therefore we must avoid inserting too large strings.
     assert!(string.len() <= PAGE_SIZE);
@@ -209,7 +211,7 @@ impl PageTree {
     self.insert_page_at_offset(page, offset);
   }
 
-  fn insert_page_at_offset(&mut self, page: Page, offset: uint) {
+  fn insert_page_at_offset(&mut self, page: Page, offset: usize) {
     assert!(offset <= self.length);
 
     // insert the page in the appropriate branch
@@ -257,7 +259,9 @@ impl PageTree {
   fn ensure_balanced(&mut self) {
     let left_height = self.left.height();
     let right_height = self.right.height();
-    let height_diff = (left_height as int - right_height as int).abs();
+    let height_diff =
+      if left_height >= right_height { left_height - right_height }
+      else                           { right_height - left_height };
 
     // assuming the tree was well balanced before some recent insert/removal
     assert!(height_diff <= 2);
@@ -333,8 +337,8 @@ impl PageTree {
 
   // Optionally returns the page containing a certain offset along with total
   // offset building up to the start of it.
-  fn find_page_by_offset<'l>(&'l self, offset: uint)
-      -> Option<(&'l Page, uint)> {
+  fn find_page_by_offset<'l>(&'l self, offset: usize)
+      -> Option<(&'l Page, usize)> {
     if offset >= self.length { return None; }
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
     let res = match if go_left { &self.left } else { &self.right } {
@@ -346,13 +350,13 @@ impl PageTree {
       (page, offset + if go_left { 0 } else { self.left.length() }))
   }
 
-  fn decide_branch_by_offset(&self, offset: uint) -> (bool, uint) {
+  fn decide_branch_by_offset(&self, offset: usize) -> (bool, usize) {
     let left_length = self.left.length();
     let go_left = left_length == 0 || offset < left_length;
     return (go_left, if go_left { offset } else { offset - left_length });
   }
 
-  fn decide_branch_by_line(&self, line: uint) -> (bool, uint) {
+  fn decide_branch_by_line(&self, line: usize) -> (bool, usize) {
     let left_newlines = self.left.newlines();
     let go_left = line <= left_newlines;
     return (go_left, if go_left { line } else { line - left_newlines });
@@ -368,11 +372,11 @@ impl PageTree {
  */
 struct PageTreeIterator<'l> {
   tree: &'l PageTree,
-  next_offset: uint,
+  next_offset: usize,
 }
 
 impl<'l> PageTreeIterator<'l> {
-  fn new(tree: &'l PageTree, start_offset: uint) -> PageTreeIterator<'l> {
+  fn new(tree: &'l PageTree, start_offset: usize) -> PageTreeIterator<'l> {
     PageTreeIterator { tree: tree, next_offset: start_offset }
   }
 }
@@ -391,13 +395,13 @@ impl<'l> Iterator for PageTreeIterator<'l> {
  * and end offsets.
  */
 struct CharIterator<'l> {
-  counter: uint,
+  counter: usize,
   pages: PageTreeIterator<'l>,
   chars: Option<::std::str::Chars<'l>>,
 }
 
 impl<'l> CharIterator<'l> {
-  fn new(tree: &'l PageTree, start: uint, end: uint) -> CharIterator<'l> {
+  fn new(tree: &'l PageTree, start: usize, end: usize) -> CharIterator<'l> {
     assert!(start < end && end <= tree.length);
     let mut pages = PageTreeIterator::new(tree, start);
     let page = pages.next().unwrap();
@@ -430,7 +434,7 @@ impl<'l> Iterator for CharIterator<'l> {
  */
 struct LineIterator<'l> {
   tree: &'l PageTree,
-  next_line: uint
+  next_line: usize
 }
 
 impl<'l> LineIterator<'l> {
@@ -438,7 +442,7 @@ impl<'l> LineIterator<'l> {
     LineIterator { tree: tree, next_line: 0 }
   }
 
-  pub fn from(mut self, line: uint) -> LineIterator<'l> {
+  pub fn from(mut self, line: usize) -> LineIterator<'l> {
     self.next_line = line;
     self
   }
@@ -463,8 +467,8 @@ impl<'l> Iterator for LineIterator<'l> {
  */
 struct Page {
   data: String,
-  length: uint,
-  newline_offsets: Vec<uint>,  // cached offsets to newlines within the page
+  length: usize,
+  newline_offsets: Vec<usize>,  // cached offsets to newlines within the page
 }
 
 impl Page {
@@ -475,21 +479,21 @@ impl Page {
     return page;
   }
 
-  fn insert_string_at_offset(&mut self, string: String, offset: uint) {
+  fn insert_string_at_offset(&mut self, string: String, offset: usize) {
     assert!(offset <= self.data.chars().count());
-    let byte_offset = self.data.slice_chars(0, offset).len() as int;
+    let byte_offset = self.data.slice_chars(0, offset).len() as isize;
     let original_size = self.data.len();
     let string_size = string.len();
     self.data.push_str(&string);  // first grow organically
     unsafe {
       let bytes_mut = self.data.as_mut_vec().as_mut_ptr();
       // make place by shifting some original data to the side
-      ptr::copy(bytes_mut.offset(byte_offset + string_size as int),
-                self.data.as_bytes().as_ptr().offset(byte_offset),
-                original_size - byte_offset as uint);
+      ptr::copy(self.data.as_bytes().as_ptr().offset(byte_offset),
+                bytes_mut.offset(byte_offset + string_size as isize),
+                original_size - byte_offset as usize);
       // plunk that chunk in there
-      ptr::copy(bytes_mut.offset(byte_offset),
-                string.as_bytes().as_ptr(),
+      ptr::copy(string.as_bytes().as_ptr(),
+                bytes_mut.offset(byte_offset),
                 string_size);
     }
     self.update_caches();
@@ -505,7 +509,7 @@ impl Page {
     }
   }
 
-  fn offset_of_newline(&self, newline: uint) -> Option<uint> {
+  fn offset_of_newline(&self, newline: usize) -> Option<usize> {
     self.newline_offsets.get(newline).map(|&offset| offset)
   }
 
@@ -526,11 +530,11 @@ impl Page {
  */
 struct StringChunkerator {
   data: Vec<u8>,
-  chunk_size: uint,
+  chunk_size: usize,
 }
 
 impl StringChunkerator {
-  fn new(string: String, chunk_size: uint) -> StringChunkerator {
+  fn new(string: String, chunk_size: usize) -> StringChunkerator {
     StringChunkerator { data: string.into_bytes(), chunk_size: chunk_size }
   }
 }
@@ -575,7 +579,7 @@ impl PageStream {
 
   // Assumes |data| is well formed utf8 with the possible exception of a broken
   // last character
-  fn raw_data_to_utf8_string(data: &[u8]) -> (String, uint) {
+  fn raw_data_to_utf8_string(data: &[u8]) -> (String, usize) {
     let mut string = String::from_utf8_lossy(data).into_owned();
     let mut num_truncated_bytes = 0;
     // adjust for multi-byte code-points spanning page boundaries
@@ -593,9 +597,10 @@ impl Iterator for PageStream {
   type Item = Page;
 
   fn next(&mut self) -> Option<Page> {
+    use self::core::ops::DerefMut;
     use std::io::SeekFrom;
     let mut data = Box::new([0; PAGE_SIZE]);
-    self.file.read(data.as_mut_slice()).
+    self.file.read(data.deref_mut()).
     and_then(|bytes| if bytes == 0 { Ok(None) } else {
       let (string, num_truncated_bytes) =
         PageStream::raw_data_to_utf8_string(&(*data)[0..bytes]);
@@ -669,7 +674,7 @@ impl Buffer {
     map_err(|io_err| BufferError::IoError(io_err))
   }
 
-  pub fn insert_at_offset(&mut self, string: String, mut offset: uint) {
+  pub fn insert_at_offset(&mut self, string: String, mut offset: usize) {
     if string.len() > PAGE_SIZE {
       for chunk in StringChunkerator::new(string, PAGE_SIZE) {
         let chunk_length = chunk.chars().count();
@@ -682,14 +687,14 @@ impl Buffer {
     }
   }
 
-  pub fn get_char_by_line_column(&self, line: uint, column: uint)
+  pub fn get_char_by_line_column(&self, line: usize, column: usize)
       -> Option<char> {
     self.tree.get_char_by_line_column(line, column)
   }
 
   // if the file doesn't end with a newline, the characters after the last
   // newline will still be counted as just another line
-  pub fn num_lines(&self) -> uint {
+  pub fn num_lines(&self) -> usize {
     if self.tree.length == 0 { 0 } else {
       let borked_last_line = self.tree.get_char_by_offset(self.tree.length - 1).
                              map(|c| c != '\n').unwrap();
@@ -698,7 +703,7 @@ impl Buffer {
   }
 
   // excludes newline character from the count if the line has one
-  pub fn line_length(&self, line: uint) -> Option<uint> {
+  pub fn line_length(&self, line: usize) -> Option<usize> {
     if self.tree.length == 0 { None } else {
       self.tree.line_start_and_end_offset(line).
       map(|(start_offset, end_offset)| {
@@ -718,7 +723,6 @@ impl Buffer {
 mod test {
   use std::fs::File;
   use std::io;
-  use std::num::SignedInt;
   use std::path::Path;
 
   // Opens a buffer (new or loaded file), performs some operation on it,
@@ -795,24 +799,24 @@ mod test {
     );
   }
 
-  simple_balance_test!(balanced_append_32, append_page, 32u);
-  simple_balance_test!(balanced_append_33, append_page, 33u);
-  simple_balance_test!(balanced_append_9001, append_page, 9001u);
-  simple_balance_test!(balanced_prepend_32, prepend_page, 32u);
-  simple_balance_test!(balanced_prepend_33, prepend_page, 33u);
-  simple_balance_test!(balanced_prepend_9001, prepend_page, 9001u);
+  simple_balance_test!(balanced_append_32, append_page, 32);
+  simple_balance_test!(balanced_append_33, append_page, 33);
+  simple_balance_test!(balanced_append_9001, append_page, 9001);
+  simple_balance_test!(balanced_prepend_32, prepend_page, 32);
+  simple_balance_test!(balanced_prepend_33, prepend_page, 33);
+  simple_balance_test!(balanced_prepend_9001, prepend_page, 9001);
 
   macro_rules! balance_test {
     ($name:ident, $num_pages:expr) => (
       #[test]
       fn $name() {
         let mut tree = super::PageTree::new();
-        let denominator = 4u;
-        let mut numerator = 0u;
+        let denominator: usize = 4;
+        let mut numerator: usize = 0;
         for i in 0..$num_pages {
           let page = super::Page::new(String::from_str("abc"));
           let fraction = (numerator as f32) / (denominator as f32);
-          let offset = ((i as f32) * fraction) as uint * page.length;
+          let offset = ((i as f32) * fraction) as usize * page.length;
           tree.insert_page_at_offset(page, offset);
           numerator = (numerator + 1) % (denominator + 1);
         }
@@ -821,9 +825,9 @@ mod test {
     );
   }
 
-  balance_test!(balanced_insert_32, 32u);
-  balance_test!(balanced_insert_33, 33u);
-  balance_test!(balanced_insert_9001, 9001u);
+  balance_test!(balanced_insert_32, 32);
+  balance_test!(balanced_insert_33, 33);
+  balance_test!(balanced_insert_9001, 9001);
 
   fn is_balanced(tree: &super::PageTree) -> bool {
     let branch_is_balanced = |branch: &super::PageTreeNode| {
@@ -832,9 +836,12 @@ mod test {
         _                                    => true,
       }
     };
-    let left_height = tree.left.height() as int;
-    let right_height = tree.right.height() as int;
-    return (left_height - right_height).abs() < 2 &&
+    let left_height = tree.left.height();
+    let right_height = tree.right.height();
+    let height_diff =
+      if left_height >= right_height { left_height - right_height }
+      else                           { right_height - left_height };
+    return height_diff < 2 &&
       branch_is_balanced(&tree.left) && branch_is_balanced(&tree.right);
   }
 
@@ -872,12 +879,12 @@ mod test {
   #[test]
   fn line_column_to_offset_test() {
     let tests = [
-       ((0u, 0u), Some(0u)), ((0u, 15u), Some(15u)), ((0u, 16u), None),
-       ((1u, 15u), Some(31u)), ((1u, 28u), Some(44u)),
-       ((5u, 0u), Some(51u)), ((5u, 1u), None),
-       ((7u, 0u), Some(53u)),
-       ((8u, 0u), Some(62u)), ((8u, 1u), None),
-       ((9u, 0u), None), ((9u, 1u), None)
+       ((0, 0), Some(0)), ((0, 15), Some(15)), ((0, 16), None),
+       ((1, 15), Some(31)), ((1, 28), Some(44)),
+       ((5, 0), Some(51)), ((5, 1), None),
+       ((7, 0), Some(53)),
+       ((8, 0), Some(62)), ((8, 1), None),
+       ((9, 0), None), ((9, 1), None)
     ];
 
     let test_path = Path::new("tests/buffer/line_column_offset.txt");
@@ -891,12 +898,12 @@ mod test {
   #[test]
   fn get_char_by_line_column_test() {
     let tests = [
-      ((0u, 0u), Some('a')), ((0u, 15u), Some('\n')), ((0u, 16u), None),
-      ((1u, 15u), Some('p')), ((1u, 28u), Some('ö')),
-      ((5u, 0u), Some('\n')), ((5u, 1u), None),
-      ((7u, 0u), Some('2')),
-      ((8u, 0u), None), ((8u, 1u), None),
-      ((9u, 0u), None), ((9u, 1u), None)
+      ((0, 0), Some('a')), ((0, 15), Some('\n')), ((0, 16), None),
+      ((1, 15), Some('p')), ((1, 28), Some('ö')),
+      ((5, 0), Some('\n')), ((5, 1), None),
+      ((7, 0), Some('2')),
+      ((8, 0), None), ((8, 1), None),
+      ((9, 0), None), ((9, 1), None)
     ];
 
     let test_path = Path::new("tests/buffer/line_column_offset.txt");
@@ -920,7 +927,7 @@ mod test {
     line_length_test(&path, &expect);
   }
 
-  fn line_length_test(path: &Path, expect: &[uint]) {
+  fn line_length_test(path: &Path, expect: &[usize]) {
     let buffer = super::Buffer::open(path).unwrap();
     assert_eq!(buffer.num_lines(), expect.len());
     for line in 0..buffer.num_lines() {
