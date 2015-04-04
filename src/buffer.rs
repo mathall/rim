@@ -15,7 +15,6 @@ use std::fs::File;
 use std::io;
 use std::io::{Seek, Read, Write};
 use std::mem;
-use std::num::SignedInt;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
@@ -724,7 +723,6 @@ impl Buffer {
 mod test {
   use std::fs::File;
   use std::io;
-  use std::num::SignedInt;
   use std::path::Path;
 
   // Opens a buffer (new or loaded file), performs some operation on it,
