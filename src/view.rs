@@ -7,7 +7,6 @@
  */
 
 use std::cmp;
-use std::iter::AdditiveIterator;
 
 use buffer;
 use screen;
