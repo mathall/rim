@@ -27,6 +27,7 @@ use std::thread;
 
 #[allow(dead_code, unused_imports)]  // temporary until buffer is used for real
 mod buffer;
+mod caret;
 mod command;
 mod frame;
 mod input;
@@ -36,6 +37,7 @@ mod view;
 
 #[cfg(not(test))]
 struct Window {
+  caret: caret::Caret,
   view: view::View,
   rect: screen::Rect,
   needs_redraw: bool,
@@ -47,6 +49,7 @@ struct Window {
 impl Window {
   fn new() -> Window {
     Window {
+      caret: caret::Caret::new(),
       view: view::View::new(),
       rect: screen::Rect(screen::Cell(0, 0), screen::Size(0, 0)),
       needs_redraw: true,
@@ -138,7 +141,8 @@ impl Rim {
     self.windows.get(win_id).
     map(|win| {
       let screen::Rect(position, _) = win.rect;
-      win.view.draw(&self.buffer, self.focus == *win_id, position, screen) }).
+      let focused = self.focus == *win_id;
+      win.view.draw(&self.buffer, win.caret, focused, position, screen) }).
     expect("Couldn't find window.");
   }
 
@@ -158,7 +162,10 @@ impl Rim {
       map(|mut win| {
         let screen::Rect(_, old_size) = win.rect;
         let screen::Rect(_, new_size) = new_rect;
-        if old_size != new_size { win.view.set_size(new_size, &self.buffer); }
+        if old_size != new_size {
+          win.view.set_size(new_size);
+          win.view.scroll_into_view(win.caret, &self.buffer);
+        }
         win.rect = new_rect;
         win.needs_redraw = true;
         self.windows.insert(win_id.clone(), win); }).
@@ -200,14 +207,15 @@ impl Rim {
 
   fn handle_win_cmd(&mut self, cmd: command::WinCmd, win: &mut Window) {
     match cmd {
-      command::WinCmd::MoveCaret(movement) => {
-        win.view.move_caret(movement, &self.buffer);
+      command::WinCmd::MoveCaret(adjustment) => {
+        win.caret.adjust(adjustment, &self.buffer);
+        win.view.scroll_into_view(win.caret, &self.buffer);
         win.needs_redraw = true;
       }
-      command::WinCmd::EnterNormalMode     =>
+      command::WinCmd::EnterNormalMode       =>
         self.cmd_thread.set_mode(win.normal_mode.clone(), 1).ok().expect(
           "Command thread died."),
-      command::WinCmd::EnterInsertMode     =>
+      command::WinCmd::EnterInsertMode       =>
         self.cmd_thread.set_mode(win.insert_mode.clone(), 1).ok().expect(
           "Command thread died."),
     }
@@ -337,21 +345,21 @@ fn default_normal_mode() -> command::Mode {
   use command::{Cmd, WinCmd};
   let mut mode = command::Mode::new();
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharPrev)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Right, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharNext)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNext)));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Up, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineUp)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineUp)));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Down, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineDown)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineDown)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharPrev)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::CharNext)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNext)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineUp)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineUp)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::MoveCaret(view::CaretMovement::LineDown)));
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineDown)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'i', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertMode));
   return mode;

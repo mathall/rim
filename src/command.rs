@@ -11,9 +11,9 @@ use std::mem;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
 
+use caret;
 use frame;
 use keymap;
-use view;
 
 #[cfg(not(test))]
 const TIMEOUT: u32 = 3000;
@@ -344,7 +344,7 @@ pub enum Cmd {
 #[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum WinCmd {
-  MoveCaret(view::CaretMovement),
+  MoveCaret(caret::Adjustment),
   EnterNormalMode,
   EnterInsertMode,
 }
