@@ -22,6 +22,8 @@ extern crate bitflags;
 use std::collections::HashMap;
 #[cfg(not(test))]
 use std::path::Path;
+#[cfg(not(test))]
+use std::thread;
 
 #[allow(dead_code, unused_imports)]  // temporary until buffer is used for real
 mod buffer;
@@ -233,13 +235,23 @@ fn main() {
 
   rim.cmd_thread.set_key_rx(key_rx).ok().expect("Command thread died.");
 
-  loop {
-    if cmd_rx.try_recv().map(|cmd| rim.handle_cmd(cmd)) ==
-        Err(std::sync::mpsc::TryRecvError::Disconnected) {
-      panic!("Command receiver died.");
+  // attempt to redraw at a regular interval
+  let (draw_pulse_tx, draw_pulse_rx) = std::sync::mpsc::channel();
+  thread::spawn(move || {
+    loop {
+      thread::sleep_ms(33);
+      if draw_pulse_tx.send(()).is_err() { break; }
     }
+  });
 
-    if rim.quit { break }
+  loop {
+    select!(
+      cmd = cmd_rx.recv()       => {
+        rim.handle_cmd(cmd.ok().expect("Command receiver died."));
+        if rim.quit { break } else { continue }
+      },
+      _ = draw_pulse_rx.recv()  => {}
+    );
 
     // clear/redraw/update/invalidate everything if the screen size changed
     if screen.update_size() {
