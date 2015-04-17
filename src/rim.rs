@@ -21,7 +21,7 @@ extern crate bitflags;
 #[cfg(not(test))]
 use std::collections::HashMap;
 #[cfg(not(test))]
-use std::path::Path;
+use std::path::{Path, PathBuf};
 #[cfg(not(test))]
 use std::thread;
 
@@ -35,10 +35,16 @@ mod keymap;
 mod screen;
 mod view;
 
+type BufferId = usize;
+
 #[cfg(not(test))]
+const INVALID_BUFFER_ID: BufferId = 0;
+
+#[cfg(not(test))]
+#[derive(Clone)]
 struct Window {
-  caret: caret::Caret,
-  view: view::View,
+  buf_id: BufferId,
+  states: HashMap<BufferId, (caret::Caret, view::View)>,
   rect: screen::Rect,
   needs_redraw: bool,
   normal_mode: command::Mode,
@@ -48,14 +54,44 @@ struct Window {
 #[cfg(not(test))]
 impl Window {
   fn new() -> Window {
-    Window {
-      caret: caret::Caret::new(),
-      view: view::View::new(),
+    let mut win = Window {
+      buf_id: INVALID_BUFFER_ID,
+      states: HashMap::new(),
       rect: screen::Rect(screen::Cell(0, 0), screen::Size(0, 0)),
       needs_redraw: true,
       normal_mode: default_normal_mode(),
       insert_mode: default_insert_mode(),
+    };
+    win.set_buf_id(INVALID_BUFFER_ID);
+    return win;
+  }
+
+  fn caret(&self) -> &caret::Caret {
+    self.states.get(&self.buf_id).map(|&(ref c, _)| c).expect(
+      "Window lacked state for the buffer id.")
+  }
+
+  fn caret_mut(&mut self) -> &mut caret::Caret {
+    self.states.get_mut(&self.buf_id).map(|&mut (ref mut c, _)| c).expect(
+      "Window lacked state for the buffer id.")
+  }
+
+  fn view(&self) -> &view::View {
+    self.states.get(&self.buf_id).map(|&(_, ref v)| v).expect(
+      "Window lacked state for the buffer id.")
+  }
+
+  fn view_mut(&mut self) -> &mut view::View {
+    self.states.get_mut(&self.buf_id).map(|&mut (_, ref mut v)| v).expect(
+      "Window lacked state for the buffer id.")
+  }
+
+  fn set_buf_id(&mut self, buf_id: BufferId) {
+    if !self.states.contains_key(&buf_id) {
+      self.states.insert(buf_id, (caret::Caret::new(), view::View::new()));
     }
+    self.buf_id = buf_id;
+    self.needs_redraw = true;
   }
 }
 
@@ -66,7 +102,8 @@ struct Rim {
   frame_needs_redraw: bool,
   windows: HashMap<frame::WindowId, Window>,
   focus: frame::WindowId,
-  buffer: buffer::Buffer,
+  buffers: HashMap<BufferId, buffer::Buffer>,
+  next_buf_id: BufferId,
   cmd_thread: command::CmdThread,
   quit: bool,
 }
@@ -87,10 +124,24 @@ impl Rim {
       frame_needs_redraw: true,
       windows: windows,
       focus: first_win_id,
-      buffer: buffer::Buffer::open(&Path::new("src/rim.rs")).unwrap(),
+      buffers: HashMap::new(),
+      next_buf_id: INVALID_BUFFER_ID + 1,
       cmd_thread: cmd_thread,
       quit: false,
     }
+  }
+
+  fn load_buffer(&mut self, path: &Path) -> Option<BufferId> {
+    for (buf_id, buf) in self.buffers.iter() {
+      if let Ok(buf_path) = buf.path() {
+        if path == buf_path { return Some(*buf_id) }
+      }
+    }
+    buffer::Buffer::open(path).map(|buf| {
+      let id = self.next_buf_id;
+      self.next_buf_id += 1;
+      self.buffers.insert(id, buf);
+      return id; }).ok()
   }
 
   fn move_focus(&mut self, direction: frame::Direction) {
@@ -116,7 +167,9 @@ impl Rim {
   fn split_window(&mut self, orientation: frame::Orientation) {
     self.frame.split_window(&mut self.frame_ctx, &self.focus, orientation).
     map(|new_win_id| {
-      self.windows.insert(new_win_id, Window::new());
+      let win = self.windows.get(&self.focus).map(|win| win.clone()).
+        expect("Couldn't find focused window.");
+      self.windows.insert(new_win_id, win);
       self.invalidate_frame(); }).
     ok().expect("Failed to split window.");
   }
@@ -142,7 +195,8 @@ impl Rim {
     map(|win| {
       let screen::Rect(position, _) = win.rect;
       let focused = self.focus == *win_id;
-      win.view.draw(&self.buffer, win.caret, focused, position, screen) }).
+      self.buffers.get(&win.buf_id).map(|buffer|
+        win.view().draw(buffer, *win.caret(), focused, position, screen)) }).
     expect("Couldn't find window.");
   }
 
@@ -163,8 +217,10 @@ impl Rim {
         let screen::Rect(_, old_size) = win.rect;
         let screen::Rect(_, new_size) = new_rect;
         if old_size != new_size {
-          win.view.set_size(new_size);
-          win.view.scroll_into_view(win.caret, &self.buffer);
+          win.view_mut().set_size(new_size);
+          self.buffers.get(&win.buf_id).map(|buffer| {
+            let caret = *win.caret();
+            win.view_mut().scroll_into_view(caret, buffer) });
         }
         win.rect = new_rect;
         win.needs_redraw = true;
@@ -208,8 +264,10 @@ impl Rim {
   fn handle_win_cmd(&mut self, cmd: command::WinCmd, win: &mut Window) {
     match cmd {
       command::WinCmd::MoveCaret(adjustment) => {
-        win.caret.adjust(adjustment, &self.buffer);
-        win.view.scroll_into_view(win.caret, &self.buffer);
+        self.buffers.get(&win.buf_id).map(|buffer| {
+          win.caret_mut().adjust(adjustment, buffer);
+          let caret = *win.caret();
+          win.view_mut().scroll_into_view(caret, buffer); });
         win.needs_redraw = true;
       }
       command::WinCmd::EnterNormalMode       =>
@@ -218,14 +276,16 @@ impl Rim {
       command::WinCmd::EnterInsertMode       =>
         self.cmd_thread.set_mode(win.insert_mode.clone(), 1).ok().expect(
           "Command thread died."),
+      command::WinCmd::OpenBuffer(path)      => {
+        self.load_buffer(path.as_path()).map(|buf_id| {
+          win.set_buf_id(buf_id);
+          let screen::Rect(_, size) = win.rect;
+          win.view_mut().set_size(size);
+          self.buffers.get(&win.buf_id).map(|buffer| {
+            let caret = *win.caret();
+            win.view_mut().scroll_into_view(caret, buffer) }); });
+      }
     }
-  }
-}
-
-#[cfg(not(test))]
-impl Drop for Rim {
-  fn drop(&mut self) {
-    self.buffer.write().unwrap();  // what could go wrong!
   }
 }
 
@@ -237,6 +297,9 @@ fn main() {
   let _term_input = input::start(key_tx);
 
   let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+  cmd_tx.send(command::Cmd::ResetLayout).unwrap();
+  cmd_tx.send(command::Cmd::WinCmd(command::WinCmd::OpenBuffer(
+    PathBuf::from("src/rim.rs")))).unwrap();
   let cmd_thread = command::start(cmd_tx);
 
   let mut rim = Rim::new(cmd_thread);
@@ -362,6 +425,14 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineDown)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'i', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertMode));
+  mode.keychain.bind(&[Key::Fn{num: 1, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/rim.rs"))));
+  mode.keychain.bind(&[Key::Fn{num: 2, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/buffer.rs"))));
+  mode.keychain.bind(&[Key::Fn{num: 3, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/command.rs"))));
+  mode.keychain.bind(&[Key::Fn{num: 4, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/frame.rs"))));
   return mode;
 }
 

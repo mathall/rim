@@ -8,6 +8,7 @@
 
 use std::collections::{HashMap, VecDeque, VecMap};
 use std::mem;
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
 
@@ -340,6 +341,7 @@ pub enum WinCmd {
   MoveCaret(caret::Adjustment),
   EnterNormalMode,
   EnterInsertMode,
+  OpenBuffer(PathBuf),
 }
 
 #[cfg(test)]

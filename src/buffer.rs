@@ -674,6 +674,10 @@ impl Buffer {
     map_err(|io_err| BufferError::IoError(io_err))
   }
 
+  pub fn path(&self) -> BufferResult<&Path> {
+    self.path.as_ref().map(|path| path.as_path()).ok_or(BufferError::NoPath)
+  }
+
   pub fn insert_at_offset(&mut self, string: String, mut offset: usize) {
     if string.len() > PAGE_SIZE {
       for chunk in StringChunkerator::new(string, PAGE_SIZE) {

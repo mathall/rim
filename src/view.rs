@@ -16,6 +16,7 @@ const MIN_VIEW_SIZE: u16 = 1;
  * View handles the presentation of a buffer.
  * Everything is measured in screen cell coordinates.
  */
+#[derive(Clone, Copy)]
 pub struct View {
   scroll_line: usize,
   scroll_column: usize,
