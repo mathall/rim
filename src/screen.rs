@@ -23,7 +23,7 @@ impl Size {
   }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cell(pub u16, pub u16);
 
 #[cfg(not(test))]
@@ -166,6 +166,11 @@ impl Screen {
         self.terminal.put(character);
       }
     });
+  }
+
+  pub fn set_cursor_position(&mut self, position: Cell) {
+    position.within(self.size).map(|Cell(row, col)|
+      self.terminal.set_cursor_position(row, col));
   }
 
   pub fn flush(&mut self) {

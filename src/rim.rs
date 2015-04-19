@@ -411,7 +411,7 @@ fn main() {
       screen.clear();
     }
 
-    let mut flush_screen = rim.frame_needs_redraw;
+    let mut did_draw = rim.frame_needs_redraw;
 
     // draw frame if necessary
     if rim.frame_needs_redraw {
@@ -423,15 +423,23 @@ fn main() {
     for (win_id, win) in rim.windows.iter() {
       if win.needs_redraw {
         rim.draw_window(win_id, &mut screen);
-        flush_screen = true;
+        did_draw = true;
       }
     }
 
     // mark windows as not needing redraw
     for (_, win) in rim.windows.iter_mut() { win.needs_redraw = false; }
 
-    // flush screen if we did any drawing
-    if flush_screen { screen.flush(); }
+    // set caret position and flush screen if we did any drawing
+    if did_draw {
+      rim.windows.get(&rim.focus).map(|win|
+        rim.buffers.get(&win.buf_id).map(|buffer| {
+          let screen::Rect(win_position, _) = win.rect;
+          screen.set_cursor_position(win_position +
+            win.view().caret_position(*win.caret(), buffer)); })).
+      expect("Couldn't find focused window.");
+      screen.flush();
+    }
   }
 }
 

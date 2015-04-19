@@ -36,7 +36,15 @@ impl View {
     self.scroll_line
   }
 
-  #[cfg(not(test))]
+  // assumes caret is in view
+  pub fn caret_position(&self, caret: caret::Caret, buffer: &buffer::Buffer)
+      -> screen::Cell {
+    let caret_row = (caret.line() - self.scroll_line) as u16;
+    let caret_column = caret::buffer_to_screen_column(
+      caret.line(), caret.column(), buffer) - self.scroll_column;
+    screen::Cell(caret_row, caret_column as u16)
+  }
+
   pub fn add_scroll(&mut self, lines: usize, columns: usize) {
     self.scroll_line += lines;
     self.scroll_column += columns;
@@ -76,11 +84,9 @@ impl View {
               screen: &mut screen::Screen) {
     use std::cmp;
     // calculate caret screen position if focused
-    let caret_cell = if !focused { None } else {
-      let caret_row = (caret.line() - self.scroll_line) as u16;
-      let caret_column = caret::buffer_to_screen_column(
-        caret.line(), caret.column(), buffer) - self.scroll_column;
-      Some(position + screen::Cell(caret_row, caret_column as u16)) };
+    let caret_cell =
+      if focused { Some(position + self.caret_position(caret, buffer)) }
+      else       { None };
 
     // helper to put a character on the screen
     let put = |character, cell: screen::Cell, screen: &mut screen::Screen| {
@@ -157,5 +163,18 @@ mod test {
     caret.adjust(caret::Adjustment::Set(3, 10), &buffer);
     view.scroll_into_view(caret, &buffer);
     assert_eq!(view.scroll_line(), 3); assert_eq!(view.scroll_column, 6);
+  }
+
+  #[test]
+  fn caret_position() {
+    let mut caret = caret::Caret::new();
+    let buffer = buffer::Buffer::open(
+      &Path::new("tests/view/caret_position.txt")).unwrap();
+    let mut view = super::View::new();
+    view.add_scroll(1, 1);
+    caret.adjust(caret::Adjustment::Set(1, 1), &buffer);
+    assert_eq!(view.caret_position(caret, &buffer), screen::Cell(0, 1));
+    caret.adjust(caret::Adjustment::Set(2, 1), &buffer);
+    assert_eq!(view.caret_position(caret, &buffer), screen::Cell(1, 0));
   }
 }
