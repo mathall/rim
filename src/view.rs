@@ -32,6 +32,16 @@ impl View {
     }
   }
 
+  pub fn scroll_line(&self) -> usize {
+    self.scroll_line
+  }
+
+  #[cfg(not(test))]
+  pub fn add_scroll(&mut self, lines: usize, columns: usize) {
+    self.scroll_line += lines;
+    self.scroll_column += columns;
+  }
+
   pub fn scroll_into_view(&mut self, caret: caret::Caret,
                           buffer: &buffer::Buffer) {
     let (line, column) = (caret.line(), caret.column());
@@ -65,17 +75,18 @@ impl View {
               focused: bool, position: screen::Cell,
               screen: &mut screen::Screen) {
     use std::cmp;
-    // calculate caret screen position
-    let caret_row = (caret.line() - self.scroll_line) as u16;
-    let caret_column = caret::buffer_to_screen_column(
-      caret.line(), caret.column(), buffer) - self.scroll_column;
-    let caret_cell = position + screen::Cell(caret_row, caret_column as u16);
+    // calculate caret screen position if focused
+    let caret_cell = if !focused { None } else {
+      let caret_row = (caret.line() - self.scroll_line) as u16;
+      let caret_column = caret::buffer_to_screen_column(
+        caret.line(), caret.column(), buffer) - self.scroll_column;
+      Some(position + screen::Cell(caret_row, caret_column as u16)) };
 
     // helper to put a character on the screen
     let put = |character, cell: screen::Cell, screen: &mut screen::Screen| {
       use screen::Color::*;
-      let (fg, bg) = if focused && cell != caret_cell { (Black, White) }
-                     else                             { (White, Black) };
+      let highlight = caret_cell.map(|c| c != cell).unwrap_or(false);
+      let (fg, bg) = if highlight { (Black, White) } else { (White, Black) };
       screen.put(cell, character, fg, bg);
     };
 
@@ -133,18 +144,18 @@ mod test {
       &Path::new("tests/view/scroll_into_view_double_width.txt")).unwrap();
     let mut view = super::View::new();
     view.set_size(screen::Size(1, 15));
-    assert_eq!(view.scroll_line, 0); assert_eq!(view.scroll_column, 0);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 0);
     caret.adjust(caret::Adjustment::Set(0, 12), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line, 0); assert_eq!(view.scroll_column, 3);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 3);
     caret.adjust(caret::Adjustment::Set(0, 16), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line, 0); assert_eq!(view.scroll_column, 9);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 9);
     caret.adjust(caret::Adjustment::Set(0, 3), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line, 0); assert_eq!(view.scroll_column, 6);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 6);
     caret.adjust(caret::Adjustment::Set(3, 10), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line, 3); assert_eq!(view.scroll_column, 6);
+    assert_eq!(view.scroll_line(), 3); assert_eq!(view.scroll_column, 6);
   }
 }

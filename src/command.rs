@@ -342,6 +342,7 @@ pub enum WinCmd {
   EnterNormalMode,
   EnterInsertMode,
   OpenBuffer(PathBuf),
+  Insert(String),
 }
 
 #[cfg(test)]

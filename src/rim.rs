@@ -66,32 +66,50 @@ impl Window {
     return win;
   }
 
+  fn caret_for(&self, buf_id: BufferId) -> Option<&caret::Caret> {
+    self.states.get(&buf_id).map(|&(ref c, _)| c)
+  }
+
   fn caret(&self) -> &caret::Caret {
-    self.states.get(&self.buf_id).map(|&(ref c, _)| c).expect(
-      "Window lacked state for the buffer id.")
+    self.caret_for(self.buf_id).expect("Window lacked state for its buffer id.")
+  }
+
+  fn caret_mut_for(&mut self, buf_id: BufferId) -> Option<&mut caret::Caret> {
+    self.states.get_mut(&buf_id).map(|&mut (ref mut c, _)| c)
   }
 
   fn caret_mut(&mut self) -> &mut caret::Caret {
-    self.states.get_mut(&self.buf_id).map(|&mut (ref mut c, _)| c).expect(
-      "Window lacked state for the buffer id.")
+    let buf_id = self.buf_id;
+    self.caret_mut_for(buf_id).expect("Window lacked state for its buffer id.")
+  }
+
+  fn view_for(&self, buf_id: BufferId) -> Option<&view::View> {
+    self.states.get(&buf_id).map(|&(_, ref v)| v)
   }
 
   fn view(&self) -> &view::View {
-    self.states.get(&self.buf_id).map(|&(_, ref v)| v).expect(
-      "Window lacked state for the buffer id.")
+    self.view_for(self.buf_id).expect("Window lacked state for its buffer id.")
+  }
+
+  fn view_mut_for(&mut self, buf_id: BufferId) -> Option<&mut view::View> {
+    self.states.get_mut(&buf_id).map(|&mut (_, ref mut v)| v)
   }
 
   fn view_mut(&mut self) -> &mut view::View {
-    self.states.get_mut(&self.buf_id).map(|&mut (_, ref mut v)| v).expect(
-      "Window lacked state for the buffer id.")
+    let buf_id = self.buf_id;
+    self.view_mut_for(buf_id).expect("Window lacked state for its buffer id.")
   }
 
   fn set_buf_id(&mut self, buf_id: BufferId) {
-    if !self.states.contains_key(&buf_id) {
+    if !self.has_buf_id(buf_id) {
       self.states.insert(buf_id, (caret::Caret::new(), view::View::new()));
     }
     self.buf_id = buf_id;
     self.needs_redraw = true;
+  }
+
+  fn has_buf_id(&self, buf_id: BufferId) -> bool {
+    self.states.contains_key(&buf_id)
   }
 }
 
@@ -159,8 +177,13 @@ impl Rim {
     self.windows.get(&win_id).map(|win|
       self.cmd_thread.set_mode(win.normal_mode.clone(), 1).ok().expect(
         "Command thread died."));
-    self.windows.get_mut(&win_id).map(|win| win.needs_redraw = true);
     self.windows.get_mut(&self.focus).map(|win| win.needs_redraw = true);
+    self.windows.remove(&win_id).map(|mut win| {
+      win.needs_redraw = true;
+      self.buffers.get(&win.buf_id).map(|buffer| {
+        let caret = *win.caret();
+        win.view_mut().scroll_into_view(caret, buffer) });
+      self.windows.insert(win_id.clone(), win); });
     self.focus = win_id;
   }
 
@@ -270,9 +293,19 @@ impl Rim {
           win.view_mut().scroll_into_view(caret, buffer); });
         win.needs_redraw = true;
       }
-      command::WinCmd::EnterNormalMode       =>
+      command::WinCmd::EnterNormalMode       => {
         self.cmd_thread.set_mode(win.normal_mode.clone(), 1).ok().expect(
-          "Command thread died."),
+          "Command thread died.");
+        let id = win.buf_id;
+        self.buffers.remove(&id).map(|buffer| {
+          win.caret_mut().adjust(caret::Adjustment::Clamp, &buffer);
+          for (_, win) in self.windows.iter_mut() {
+            win.caret_mut_for(id).map(|caret|
+              caret.adjust(caret::Adjustment::Clamp, &buffer));
+          }
+          self.buffers.insert(id, buffer); });
+        win.needs_redraw = true;
+      }
       command::WinCmd::EnterInsertMode       =>
         self.cmd_thread.set_mode(win.insert_mode.clone(), 1).ok().expect(
           "Command thread died."),
@@ -284,6 +317,52 @@ impl Rim {
           self.buffers.get(&win.buf_id).map(|buffer| {
             let caret = *win.caret();
             win.view_mut().scroll_into_view(caret, buffer) }); });
+      }
+      command::WinCmd::Insert(string)        => {
+        self.buffers.remove(&win.buf_id).map(|mut buffer| {
+          let (insert_line, insert_col) =
+            (win.caret().line(), win.caret().column());
+          // update windows displaying the buffer, character by character
+          let (mut c_line, mut c_col) = (insert_line, insert_col);
+          for c in string.chars() {
+            let newline = c == '\n';
+            // update the caret of the focused window
+            let (new_line, new_col) =
+              if newline { (win.caret().line() + 1, 0) }
+              else       { (win.caret().line(), win.caret().column() + 1) };
+            win.caret_mut().adjust(
+              caret::Adjustment::Set(new_line, new_col), &buffer);
+            // update other windows which has viewed the buffer
+            let id = win.buf_id;
+            for (_, win) in self.windows.iter_mut() {
+              if !win.has_buf_id(id) { continue }
+              // keep the content of other views still if possible
+              if win.view_for(id).unwrap().scroll_line() > c_line && newline {
+                win.view_mut_for(id).unwrap().add_scroll(1, 0);
+              }
+              // update caret of other window
+              let (cur_line, cur_col) =
+                win.caret_for(id).map(|c| (c.line(), c.column())).unwrap();
+              let (new_line, new_col) =
+                if c_line < cur_line && newline { (cur_line + 1, cur_col) }
+                else if cur_line == c_line && c_col <= cur_col {
+                  if !newline { (cur_line, cur_col + 1) }
+                  else { (cur_line, if c_col == 0 { 0 } else { c_col - 1 }) } }
+                else { (cur_line, cur_col) };
+              win.caret_mut_for(id).unwrap().adjust(
+                caret::Adjustment::WeakSet(new_line, new_col), &buffer);
+              win.needs_redraw = true;
+            }
+            if newline { c_line += 1; } else { c_col += 1; }
+          }
+          // insert string into buffer
+          buffer.insert_at_line_column(string, insert_line, insert_col).ok().
+            expect("View had invalid caret.");
+          // ensure the caret is in the view
+          let caret = *win.caret();
+          win.view_mut().scroll_into_view(caret, &buffer);
+          win.needs_redraw = true;
+          self.buffers.insert(win.buf_id, buffer); });
       }
     }
   }
@@ -445,12 +524,10 @@ fn default_insert_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::EnterNormalMode));
   fn fallback(key: keymap::Key) -> Option<command::Cmd> {
     match key {
-      Key::Sym{sym: KeySym::Left, mods: _}  => Some(frame::Direction::Left),
-      Key::Sym{sym: KeySym::Right, mods: _} => Some(frame::Direction::Right),
-      Key::Sym{sym: KeySym::Up, mods: _}    => Some(frame::Direction::Up),
-      Key::Sym{sym: KeySym::Down, mods: _}  => Some(frame::Direction::Down),
+      Key::Unicode{codepoint, mods: _}      => Some(format!("{}", codepoint)),
+      Key::Sym{sym: KeySym::Enter, mods: _} => Some("\n".to_string()),
       _                                     => None,
-    }.map(|direction| Cmd::MoveFocus(direction))
+    }.map(|string| command::Cmd::WinCmd(command::WinCmd::Insert(string)))
   }
   mode.fallback = fallback;
   return mode;

@@ -618,6 +618,7 @@ impl Iterator for PageStream {
 pub enum BufferError {
   IoError(io::Error),
   NoPath,
+  BadLocation,
 }
 
 impl fmt::Display for BufferError {
@@ -631,6 +632,8 @@ impl error::Error for BufferError {
     match *self {
       BufferError::IoError(ref err) => ::std::error::Error::description(err),
       BufferError::NoPath           => "The buffer had no path.",
+      BufferError::BadLocation      =>
+        "The line/column or offset did not specify a valid location",
     }
   }
 }
@@ -676,6 +679,13 @@ impl Buffer {
 
   pub fn path(&self) -> BufferResult<&Path> {
     self.path.as_ref().map(|path| path.as_path()).ok_or(BufferError::NoPath)
+  }
+
+  pub fn insert_at_line_column(&mut self, string: String, line: usize,
+                               column: usize) -> BufferResult<()> {
+    self.tree.line_column_to_offset(line, column).
+    map(|offset| self.insert_at_offset(string, offset)).
+    ok_or(BufferError::BadLocation)
   }
 
   pub fn insert_at_offset(&mut self, string: String, mut offset: usize) {
