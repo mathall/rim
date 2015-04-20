@@ -9,7 +9,6 @@
 #![feature(collections)]
 #![feature(core)]
 #![feature(libc)]
-#![feature(rustc_private)]
 #![feature(slice_patterns)]
 #![feature(std_misc)]
 
