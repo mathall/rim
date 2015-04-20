@@ -2,7 +2,7 @@
 Rim is an aspiring Vim-like text editor written in Rust.
 
 ## Current state
-Focus has been put on building solid foundations free of code tangling rather than reaching quick goals. Thus many buffer operations required for rim to be called a text editor are lacking but will be easily implemented at the appropriate time. All you can do for now is navigate a buffer in multiple split views. There's also support for insertion, although it is not yet "hooked up."
+Focus has been put on building solid foundations free of code tangling rather than reaching quick goals. Thus many buffer operations required for rim to be called a text editor are lacking but will be easily implemented at the appropriate time. For now you can navigate multiple buffers in multiple split views and perform simple insertion.
 
 ## Try it out
 
@@ -19,10 +19,10 @@ Note: All key bindings are for testing purposes only.
 - `<C-w>=` - Reset window sizes
 - `i` - Enter insert mode
 - `Escape` - Exit insert mode
-- `Arrow keys` in insert mode - Move window focus (exits insert mode)
+- `F1-F4` - Load some buffers
 
 ## What's next?
-Maybe some of those buffer operations. Insert mode is confusing without them.
+A few more buffer operations to make rim feel a bit more homey and meet the basic requirements to be called a text editor. Then we'll see.
 
 ## Trouble shooting
 Rustc updates are still a bit of a pain point. If things are not compiling, you're probably using a different version than I. I try to update at least once a week.
