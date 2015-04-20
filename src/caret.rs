@@ -6,7 +6,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+extern crate unicode_width;
+
 use std::cmp;
+
+use self::unicode_width::UnicodeWidthChar as CharWidth;
 
 use buffer;
 
@@ -116,7 +120,7 @@ impl Caret {
 pub fn buffer_to_screen_column(line: usize, column: usize,
                                buffer: &buffer::Buffer) -> usize {
   buffer.line_iter().from(line).next().map(|chars|
-    chars.take(column).map(|c| c.width(false).unwrap_or(0)).sum()).
+    chars.take(column).map(|c| CharWidth::width(c).unwrap_or(0)).sum()).
   unwrap_or(0)
 }
 
@@ -125,7 +129,7 @@ pub fn screen_to_buffer_column(row: usize, screen_column: usize,
                                buffer: &buffer::Buffer) -> Option<usize> {
   buffer.line_iter().from(row).next().map(|chars|
     chars.filter(|&c| c != '\n').scan(0, |sum, c| {
-      *sum += c.width(false).unwrap_or(0);
+      *sum += CharWidth::width(c).unwrap_or(0);
       Some(*sum) }).
     take_while(|&sum| sum <= screen_column).count())
 }

@@ -4,6 +4,7 @@ version = "0.0.1"
 dependencies = [
  "bitflags 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "termkey 0.17.5 (git+git://github.com/mathall/termkey-rs.git)",
+ "unicode-width 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
  "uuid 0.1.15 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
@@ -46,6 +47,11 @@ source = "git+git://github.com/mathall/termkey-rs.git#2ffe6083c00e36ee97cf04a0f9
 dependencies = [
  "bitflags 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
+
+[[package]]
+name = "unicode-width"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
 
 [[package]]
 name = "uuid"

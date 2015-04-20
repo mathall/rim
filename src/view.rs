@@ -6,6 +6,10 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+extern crate unicode_width;
+
+use self::unicode_width::UnicodeWidthChar as CharWidth;
+
 use buffer;
 use caret;
 use screen;
@@ -65,7 +69,7 @@ impl View {
     // make sure wider characters are scrolled in entirely as well
     let character = buffer.get_char_by_line_column(line, column).unwrap();
     let start = caret::buffer_to_screen_column(line, column, buffer);
-    let end = start + character.width(false).unwrap_or(1) - 1;
+    let end = start + CharWidth::width(character).unwrap_or(1) - 1;
     self.scroll_column =
       if start < self.scroll_column { start }
       else if end >= self.scroll_column + cols { end - cols + 1 }
@@ -105,7 +109,7 @@ impl View {
       let mut col = -(self.scroll_column as isize);
       for character in chars {
         if col >= cols as isize || character == '\n' { break }
-        let char_width = character.width(false).unwrap_or(0) as isize;
+        let char_width = CharWidth::width(character).unwrap_or(0) as isize;
         let end_col = col + char_width;
         if (col < 0 && end_col >= 0) || end_col > cols as isize {
           // blank out partially visible characters
