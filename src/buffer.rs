@@ -583,8 +583,8 @@ impl PageStream {
     let mut num_truncated_bytes = 0;
     // adjust for multi-byte code-points spanning page boundaries
     let replacement_char = '\u{FFFD}';
-    let string_len = string.len();
-    if string.char_at_reverse(string_len - 1) == replacement_char {
+    if string.chars().last() == Some(replacement_char) {
+      let string_len = string.len();
       string.truncate(string_len - replacement_char.len_utf8());
       num_truncated_bytes = data.len() - string.len();
     }

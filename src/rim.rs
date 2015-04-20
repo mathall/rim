@@ -12,7 +12,6 @@
 #![feature(rustc_private)]
 #![feature(slice_patterns)]
 #![feature(std_misc)]
-#![feature(str_char)]
 
 #[macro_use]
 extern crate bitflags;
