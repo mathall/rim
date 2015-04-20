@@ -551,7 +551,6 @@ impl Iterator for StringChunkerator {
       chunk = match String::from_utf8(chunk) {
         Ok(good_chunk) => return Some(good_chunk),
         Err(err)       => {
-          assert_eq!(err.utf8_error(), ::std::str::Utf8Error::TooShort);
           // shift a byte back to data before trying again
           let mut broken_chunk = err.into_bytes();
           broken_chunk.pop().map(|byte| self.data.insert(0, byte)).unwrap();
