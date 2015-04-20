@@ -8,12 +8,13 @@
 
 use std::collections::{HashMap, VecDeque, VecMap};
 use std::mem;
+use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
 
+use caret;
 use frame;
 use keymap;
-use view;
 
 #[cfg(not(test))]
 const TIMEOUT: u32 = 3000;
@@ -243,6 +244,7 @@ enum MatchResult {
  * shorter complete matchings to overshadow longer partial ones depending on
  * mode.
  */
+#[derive(Clone)]
 pub enum Keychain {
   Node(HashMap<keymap::Key, Keychain>, Option<Cmd>),
   Cmd(Cmd),
@@ -287,21 +289,23 @@ impl Keychain {
     let res_from_opt = |opt: Option<Cmd>|
       opt.map(|cmd| MatchResult::Complete(cmd, 0)).unwrap_or(MatchResult::None);
     match self {
-      &Keychain::Cmd(cmd)               => MatchResult::Complete(cmd, 0),
-      &Keychain::Node(ref map, opt_cmd) =>
+      &Keychain::Cmd(ref cmd)               =>
+        MatchResult::Complete(cmd.clone(), 0),
+      &Keychain::Node(ref map, ref opt_cmd) =>
         keys.next().map(|key|
           map.get(key).map(|chain|
             match chain.match_keys(keys, force) {
-              MatchResult::None               => res_from_opt(opt_cmd),
+              MatchResult::None               => res_from_opt(opt_cmd.clone()),
               MatchResult::Partial(num)       =>
-                if force { res_from_opt(opt_cmd) }
+                if force { res_from_opt(opt_cmd.clone()) }
                 else     { MatchResult::Partial(num + 1) },
               MatchResult::Complete(cmd, num) =>
                 MatchResult::Complete(cmd, num + 1),
             }).
-          unwrap_or_else(|| res_from_opt(opt_cmd))).
+          unwrap_or_else(|| res_from_opt(opt_cmd.clone()))).
         unwrap_or_else(||
-          match if force { res_from_opt(opt_cmd) } else { MatchResult::None } {
+          match if force { res_from_opt(opt_cmd.clone()) }
+                else     { MatchResult::None } {
             MatchResult::None if map.len() > 0 => MatchResult::Partial(0),
             otherwise                          => otherwise,
           }),
@@ -309,20 +313,10 @@ impl Keychain {
   }
 }
 
-impl Clone for Keychain {
-  fn clone(&self) -> Keychain {
-    match self {
-      &Keychain::Node(ref map, cmd) =>
-        Keychain::Node(map.iter().map(|(k, v)| (*k, v.clone())).collect(), cmd),
-      &Keychain::Cmd(cmd)           => Keychain::Cmd(cmd),
-    }
-  }
-}
-
 /*
  * Commands for rim.
  */
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum Cmd {
@@ -340,13 +334,15 @@ pub enum Cmd {
 /*
  * Commands intended for the focused window.
  */
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 #[cfg_attr(test, allow(dead_code))]  // the tests don't make use of all commands
 pub enum WinCmd {
-  MoveCaret(view::CaretMovement),
+  MoveCaret(caret::Adjustment),
   EnterNormalMode,
   EnterInsertMode,
+  OpenBuffer(PathBuf),
+  Insert(String),
 }
 
 #[cfg(test)]
@@ -390,7 +386,7 @@ mod test {
     for output in outputs.iter() {
       select!(
         cmd = cmd_rx.recv()   => {
-          assert_eq!(cmd.unwrap(), *output);
+          assert_eq!(cmd.clone().unwrap(), *output);
           callback(cmd.unwrap(), &cmd_thread);
           cmd_thread.ack_cmd().unwrap();
         },

@@ -6,8 +6,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate core;
-
 use std::cmp;
 use std::error;
 use std::fmt;
@@ -551,7 +549,6 @@ impl Iterator for StringChunkerator {
       chunk = match String::from_utf8(chunk) {
         Ok(good_chunk) => return Some(good_chunk),
         Err(err)       => {
-          assert_eq!(err.utf8_error(), ::std::str::Utf8Error::TooShort);
           // shift a byte back to data before trying again
           let mut broken_chunk = err.into_bytes();
           broken_chunk.pop().map(|byte| self.data.insert(0, byte)).unwrap();
@@ -584,8 +581,8 @@ impl PageStream {
     let mut num_truncated_bytes = 0;
     // adjust for multi-byte code-points spanning page boundaries
     let replacement_char = '\u{FFFD}';
-    let string_len = string.len();
-    if string.char_at_reverse(string_len - 1) == replacement_char {
+    if string.chars().last() == Some(replacement_char) {
+      let string_len = string.len();
       string.truncate(string_len - replacement_char.len_utf8());
       num_truncated_bytes = data.len() - string.len();
     }
@@ -597,7 +594,7 @@ impl Iterator for PageStream {
   type Item = Page;
 
   fn next(&mut self) -> Option<Page> {
-    use self::core::ops::DerefMut;
+    use std::ops::DerefMut;
     use std::io::SeekFrom;
     let mut data = Box::new([0; PAGE_SIZE]);
     self.file.read(data.deref_mut()).
@@ -618,6 +615,7 @@ impl Iterator for PageStream {
 pub enum BufferError {
   IoError(io::Error),
   NoPath,
+  BadLocation,
 }
 
 impl fmt::Display for BufferError {
@@ -631,6 +629,8 @@ impl error::Error for BufferError {
     match *self {
       BufferError::IoError(ref err) => ::std::error::Error::description(err),
       BufferError::NoPath           => "The buffer had no path.",
+      BufferError::BadLocation      =>
+        "The line/column or offset did not specify a valid location",
     }
   }
 }
@@ -672,6 +672,17 @@ impl Buffer {
       fold(Ok(()),
         |ok, err| if ok.is_ok() && err.is_err() { err } else { ok })).
     map_err(|io_err| BufferError::IoError(io_err))
+  }
+
+  pub fn path(&self) -> BufferResult<&Path> {
+    self.path.as_ref().map(|path| path.as_path()).ok_or(BufferError::NoPath)
+  }
+
+  pub fn insert_at_line_column(&mut self, string: String, line: usize,
+                               column: usize) -> BufferResult<()> {
+    self.tree.line_column_to_offset(line, column).
+    map(|offset| self.insert_at_offset(string, offset)).
+    ok_or(BufferError::BadLocation)
   }
 
   pub fn insert_at_offset(&mut self, string: String, mut offset: usize) {

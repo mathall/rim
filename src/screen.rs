@@ -7,6 +7,11 @@
  */
 
 extern crate term;
+#[cfg(not(test))]
+extern crate unicode_width;
+
+#[cfg(not(test))]
+use self::unicode_width::UnicodeWidthChar as CharWidth;
 
 use std::cmp;
 #[cfg(not(test))]
@@ -23,7 +28,7 @@ impl Size {
   }
 }
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Cell(pub u16, pub u16);
 
 #[cfg(not(test))]
@@ -168,6 +173,11 @@ impl Screen {
     });
   }
 
+  pub fn set_cursor_position(&mut self, position: Cell) {
+    position.within(self.size).map(|Cell(row, col)|
+      self.terminal.set_cursor_position(row, col));
+  }
+
   pub fn flush(&mut self) {
     self.terminal.flush();
   }
@@ -216,7 +226,7 @@ impl ScreenBuffer {
     let cell = Some((character, fg, bg));
     let idx = (row as usize * self.width as usize) + col as usize;
     let buffer_size = self.cells.len();
-    let nones = || (1..character.width(false).unwrap_or(1)).
+    let nones = || (1..CharWidth::width(character).unwrap_or(1)).
                    map(|i| idx + i).filter(|i| *i < buffer_size);
     let update =
       self.cells[idx] != cell || nones().any(|i| self.cells[i] != None);
@@ -234,7 +244,7 @@ impl ScreenBuffer {
  */
 #[cfg(not(test))]
 struct Terminal {
-  terminal: Box<term::Terminal<term::WriterWrapper> + Send>,
+  terminal: Box<term::Terminal<::std::io::Stdout> + Send>,
 }
 
 #[cfg(not(test))]
