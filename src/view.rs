@@ -8,6 +8,8 @@
 
 extern crate unicode_width;
 
+use std::cmp;
+
 use self::unicode_width::UnicodeWidthChar as CharWidth;
 
 use buffer;
@@ -80,6 +82,13 @@ impl View {
       else { self.scroll_column };
   }
 
+  pub fn line_clamped_to_view(&self, line: usize) -> usize {
+    let screen::Size(rows, _) = self.size;
+    assert!(rows >= MIN_VIEW_SIZE);
+    let last_line = self.scroll_line + rows as usize - 1;
+    cmp::min(cmp::max(line, self.scroll_line), last_line)
+  }
+
   pub fn set_size(&mut self, size: screen::Size) {
     let screen::Size(rows, cols) = size;
     assert!(rows >= MIN_VIEW_SIZE && cols >= MIN_VIEW_SIZE);
@@ -90,7 +99,6 @@ impl View {
   pub fn draw(&self, buffer: &buffer::Buffer, caret: caret::Caret,
               focused: bool, position: screen::Cell,
               screen: &mut screen::Screen) {
-    use std::cmp;
     // calculate caret screen position if focused
     let caret_cell =
       if focused { Some(position + self.caret_position(caret, buffer)) }
@@ -184,5 +192,15 @@ mod test {
     assert_eq!(view.caret_position(caret, &buffer), screen::Cell(0, 1));
     caret.adjust(caret::Adjustment::Set(2, 1), &buffer);
     assert_eq!(view.caret_position(caret, &buffer), screen::Cell(1, 0));
+  }
+
+  #[test]
+  fn line_clamped_to_view() {
+    let mut view = super::View::new();
+    view.set_size(screen::Size(5, 5));
+    view.set_scroll(5, 5);
+    assert_eq!(view.line_clamped_to_view(1), 5);
+    assert_eq!(view.line_clamped_to_view(7), 7);
+    assert_eq!(view.line_clamped_to_view(10), 9);
   }
 }

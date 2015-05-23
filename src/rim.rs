@@ -285,6 +285,22 @@ impl Rim {
       command::WinCmd::MoveCaret(adjustment)          => {
         self.move_caret(adjustment, win);
       }
+      command::WinCmd::PageUp                         => {
+        let screen::Rect(_, screen::Size(rows, _)) = win.rect;
+        self.scroll_view(-(rows as isize), win);
+      }
+      command::WinCmd::PageDown                       => {
+        let screen::Rect(_, screen::Size(rows, _)) = win.rect;
+        self.scroll_view(rows as isize, win);
+      }
+      command::WinCmd::HalfPageUp                     => {
+        let screen::Rect(_, screen::Size(rows, _)) = win.rect;
+        self.scroll_view(-(rows as isize) / 2, win);
+      }
+      command::WinCmd::HalfPageDown                   => {
+        let screen::Rect(_, screen::Size(rows, _)) = win.rect;
+        self.scroll_view(rows as isize / 2, win);
+      }
       command::WinCmd::EnterNormalMode                => {
         self.set_win_cmd_mode(&win.normal_mode);
         let id = win.buf_id;
@@ -406,6 +422,15 @@ impl Rim {
   fn set_win_cmd_mode(&mut self, mode: &command::Mode) {
     self.cmd_thread.set_mode(mode.clone(), 1).ok().
     expect("Command thread died.");
+  }
+
+  fn scroll_view(&mut self, amount: isize, win: &mut Window) {
+    let line = win.view().scroll_line();
+    let new_line = std::cmp::max(line as isize + amount, 0) as usize;
+    win.view_mut().set_scroll(new_line, 0);
+    let caret_line = win.view().line_clamped_to_view(win.caret().line());
+    self.move_caret(caret::Adjustment::Set(caret_line, 0), win);
+    self.move_caret(caret::Adjustment::Clamp, win);
   }
 
   fn move_caret(&mut self, adjustment: caret::Adjustment, win: &mut Window) {
@@ -595,8 +620,8 @@ fn main() {
 
 #[cfg(not(test))]
 fn default_mode() -> command::Mode {
-  use keymap::Key;
-  use command::Cmd;
+  use keymap::{Key, KeySym};
+  use command::{Cmd, WinCmd};
   let mut mode = command::Mode::new();
   mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
                        Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
@@ -636,14 +661,6 @@ fn default_mode() -> command::Mode {
     Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
     Cmd::Quit);
-  return mode;
-}
-
-#[cfg(not(test))]
-fn default_normal_mode() -> command::Mode {
-  use keymap::{Key, KeySym};
-  use command::{Cmd, WinCmd};
-  let mut mode = command::Mode::new();
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Right, mods: keymap::MOD_NONE}],
@@ -652,6 +669,22 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineUp)));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Down, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineDown)));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Home, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::StartOfLine)));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::End, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::EndOfLine)));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Pageup, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::PageUp));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Pagedown, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::PageDown));
+  return mode;
+}
+
+#[cfg(not(test))]
+fn default_normal_mode() -> command::Mode {
+  use keymap::{Key, KeySym};
+  use command::{Cmd, WinCmd};
+  let mut mode = command::Mode::new();
   mode.keychain.bind(&[Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
@@ -674,6 +707,32 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::EnterInsertModeNextLine));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'O', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertModePreviousLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'g', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'g', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::FirstLine)));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'G', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LastLine)));
+  mode.keychain.bind(&[Key::Unicode{codepoint: ' ', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNextFlat)));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Space, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNextFlat)));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Del, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrevFlat)));
+  mode.keychain.bind(
+    &[Key::Sym{sym: KeySym::Backspace, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrevFlat)));
+  mode.keychain.bind(&[Key::Unicode{codepoint: '0', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::StartOfLine)));
+  mode.keychain.bind(&[Key::Unicode{codepoint: '$', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::EndOfLine)));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_CTRL}],
+    Cmd::WinCmd(WinCmd::PageUp));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'f', mods: keymap::MOD_CTRL}],
+    Cmd::WinCmd(WinCmd::PageDown));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
+    Cmd::WinCmd(WinCmd::HalfPageUp));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: keymap::MOD_CTRL}],
+    Cmd::WinCmd(WinCmd::HalfPageDown));
   mode.keychain.bind(&[Key::Fn{num: 1, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/rim.rs"))));
   mode.keychain.bind(&[Key::Fn{num: 2, mods: keymap::MOD_NONE}],

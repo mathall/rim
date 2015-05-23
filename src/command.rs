@@ -355,6 +355,10 @@ pub enum WinCmd {
   DeleteLine,
   DeleteRestOfLine,
   ChangeRestOfLine,
+  PageUp,
+  PageDown,
+  HalfPageUp,
+  HalfPageDown,
 }
 
 #[cfg(test)]

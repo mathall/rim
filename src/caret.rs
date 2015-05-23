@@ -40,6 +40,10 @@ pub enum Adjustment {
   Set(usize, usize),
   WeakSet(usize, usize),
   Clamp,
+  FirstLine,
+  LastLine,
+  StartOfLine,
+  EndOfLine,
 }
 
 /*
@@ -116,6 +120,13 @@ impl Caret {
         let line = clamp(self.line, buffer.num_lines() as isize - 1);
         (line, clamped_column(line, self.column, buffer), self.saved_column)
       }
+      Adjustment::FirstLine             => (0, 0, None),
+      Adjustment::LastLine              => (buffer.num_lines() - 1, 0, None),
+      Adjustment::StartOfLine           => (self.line, 0, None),
+      Adjustment::EndOfLine             =>
+        buffer.line_length(self.line).map(|line_len|
+          (self.line, clamped_column(self.line, line_len, buffer), None)).
+        unwrap_or((self.line, self.column, None)),
     };
     if line != new_line || column != new_column {
       self.line = new_line;
