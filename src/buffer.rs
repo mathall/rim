@@ -200,6 +200,7 @@ impl PageTree {
     self.ensure_balanced();
   }
 
+  #[cfg(test)]
   fn prepend_page(&mut self, page: Page) {
     self.insert_page_at_offset(page, 0);
   }
@@ -248,12 +249,49 @@ impl PageTree {
     assert!(!self.left.is_nil() || self.right.is_nil());
   }
 
-  // If the branches' heights differ by too much, the higher branch will have
-  // two tree nodes down its highest path. Further, those two tree nodes along
-  // with |self| has in total four affected subtrees which must keep their
-  // left-to-right order relative to each other.
-  // This method will replace |self| with a new tree with left and right each
-  // being a tree node holding the affected subtrees in their appropriate order.
+  // Will delete from the start offset to either the end offset, or if the range
+  // is spanning multiple pages, to the end of the page containing the start
+  // offset. This way only one page is affected by a call to delete_range,
+  // meaning no merges but possible deletion of single leafs, and the tree can
+  // rebalance itself as necessary. Returns the deleted amount.
+  fn delete_range(&mut self, start: usize, end: usize) -> usize {
+    assert!(start < end && start <= self.length);
+    let deleted = {
+      let (go_left, new_start) = self.decide_branch_by_offset(start);
+      let new_end = end - (start - new_start);
+      let branch = if go_left { &mut self.left } else { &mut self.right };
+      let (new_branch, deleted) = match mem::replace(branch, Nil) {
+        Nil            => panic!("Attempted deleting from Nil node"),
+        Tree(mut tree) => {
+          let deleted = tree.delete_range(new_start, new_end);
+          // if a leaf was removed from the tree, lift the tree's other child
+          let new_branch = if tree.left.is_nil() { tree.right }
+                           else if tree.right.is_nil() { tree.left }
+                           else { Tree(tree) };
+          (new_branch, deleted)
+        },
+        Leaf(mut page) => {
+          let deleted = page.delete_range(new_start, new_end);
+          (if page.length == 0 { Nil } else { Leaf(page) }, deleted)
+        },
+      };
+      mem::replace(branch, new_branch);
+      deleted
+    };
+    if self.left.is_nil() { mem::swap(&mut self.left, &mut self.right); }
+    self.update_caches();
+    self.ensure_balanced();
+    return deleted;
+  }
+
+  // There are two cases when the branches' heights can differ by too much:
+  // 1) One branch is Nil and the other is a Tree. Simply replace self with the
+  // tree branch.
+  // 2) The higher branch has two tree nodes down its highest path. Further,
+  // those two tree nodes along with self has in total four affected subtrees
+  // which must keep their left-to-right order relative to each other. In this
+  // case self will be replaced with a new tree with left and right each being a
+  // tree node holding the affected subtrees in their appropriate order.
   fn ensure_balanced(&mut self) {
     let left_height = self.left.height();
     let right_height = self.right.height();
@@ -263,7 +301,13 @@ impl PageTree {
 
     // assuming the tree was well balanced before some recent insert/removal
     assert!(height_diff <= 2);
-    if height_diff == 2 {
+    if height_diff == 2 && (left_height == 0 || right_height == 0) {
+      let branch = mem::replace(
+        if self.left.is_nil() { &mut self.right } else { &mut self.left }, Nil);
+      if let Tree(new_self) = branch { mem::replace(self, *new_self); }
+      else                           { unreachable!(); }
+    }
+    else if height_diff == 2 {
 
       // keep placeholders for the affected subtrees (left to right)
       let mut t0 = Nil;
@@ -278,7 +322,6 @@ impl PageTree {
         &mut Tree(ref mut mid)  => {
           let left_height = mid.left.height();
           let right_height = mid.right.height();
-          assert!(left_height != right_height);
           let then_go_left = left_height > right_height;
           match if then_go_left { &mut mid.left } else { &mut mid.right } {
             &mut Nil | &mut Leaf(_) => unreachable!(),
@@ -497,6 +540,26 @@ impl Page {
     self.update_caches();
   }
 
+  fn delete_range(&mut self, start: usize, end: usize) -> usize {
+    assert!(start <= self.data.chars().count());
+    let deleted = cmp::min(end, self.length) - start;
+    unsafe {
+      let start = self.data.slice_chars(0, start).len();
+      let end = if end < self.length { self.data.slice_chars(0, end).len() }
+                else                 { self.data.len() };
+      // before truncating, shift down the string's ending if anything is left
+      if end < self.data.len() {
+        ptr::copy(self.data.as_bytes().as_ptr().offset(end as isize),
+                  self.data.as_mut_vec().as_mut_ptr().offset(start as isize),
+                  self.data.len() - end);
+      }
+      let new_len = self.data.len() - end + start;
+      self.data.as_mut_vec().truncate(new_len);
+    }
+    self.update_caches();
+    return deleted;
+  }
+
   fn update_caches(&mut self) {
     self.length = self.data.chars().count();
     self.newline_offsets.clear();
@@ -646,9 +709,10 @@ pub struct Buffer {
 }
 
 impl Buffer {
+  #[cfg(test)]
   pub fn new() -> Buffer {
     let mut buffer = Buffer { path: None, tree: PageTree::new() };
-    buffer.insert_at_offset(String::from_str("\n"), 0);
+    buffer.insert_at_offset("\n".to_string(), 0);
     return buffer;
   }
 
@@ -656,7 +720,18 @@ impl Buffer {
     PageStream::new(path).
     and_then(PageTree::build).
     and_then(|tree| Ok(Buffer { path: Some(path.to_path_buf()), tree: tree })).
+    map(|mut buffer| { buffer.ensure_ends_with_newline(); buffer }).
     map_err(|io_err| BufferError::IoError(io_err))
+  }
+
+  fn ensure_ends_with_newline(&mut self) {
+    let ends_with_newline = self.tree.length > 0 &&
+      self.tree.get_char_by_offset(self.tree.length - 1).map(|c| c == '\n').
+      expect("Found no last character in buffer of non-zero length.");
+    if !ends_with_newline {
+      let offset = self.tree.length;
+      self.insert_at_offset("\n".to_string(), offset);
+    }
   }
 
   pub fn write(&self) -> BufferResult<()> {
@@ -674,6 +749,7 @@ impl Buffer {
     map_err(|io_err| BufferError::IoError(io_err))
   }
 
+  #[cfg(not(test))]
   pub fn path(&self) -> BufferResult<&Path> {
     self.path.as_ref().map(|path| path.as_path()).ok_or(BufferError::NoPath)
   }
@@ -698,31 +774,33 @@ impl Buffer {
     }
   }
 
+  pub fn delete_range(&mut self, start_line: usize, start_column: usize,
+                      end_line: usize, end_column: usize) -> BufferResult<()> {
+    self.tree.line_column_to_offset(start_line, start_column).
+    and_then(|start|
+      self.tree.line_column_to_offset(end_line, end_column).
+      and_then(|end| if end < self.tree.length { Some(end) } else { None }).
+      map(|end| (start, end))).
+    and_then(|(start, end)|
+      if start < end { Some((start, end)) } else { None }).
+    map(|(start, mut end)|
+      while start < end { end -= self.tree.delete_range(start, end); } ).
+    ok_or(BufferError::BadLocation)
+  }
+
   pub fn get_char_by_line_column(&self, line: usize, column: usize)
       -> Option<char> {
     self.tree.get_char_by_line_column(line, column)
   }
 
-  // if the file doesn't end with a newline, the characters after the last
-  // newline will still be counted as just another line
   pub fn num_lines(&self) -> usize {
-    if self.tree.length == 0 { 0 } else {
-      let borked_last_line = self.tree.get_char_by_offset(self.tree.length - 1).
-                             map(|c| c != '\n').unwrap();
-      self.tree.newlines + if borked_last_line { 1 } else { 0 }
-    }
+    self.tree.newlines
   }
 
-  // excludes newline character from the count if the line has one
+  // excludes newline character from the count
   pub fn line_length(&self, line: usize) -> Option<usize> {
-    if self.tree.length == 0 { None } else {
-      self.tree.line_start_and_end_offset(line).
-      map(|(start_offset, end_offset)| {
-        assert!(start_offset < end_offset);
-        let borked_line = self.tree.get_char_by_offset(end_offset - 1).
-                          map(|c| c != '\n').unwrap();
-        end_offset - start_offset - if borked_line { 0 } else { 1 } })
-    }
+    self.tree.line_start_and_end_offset(line).and_then(|(start, end)|
+      if start >= end { None } else { Some(end - start - 1) })
   }
 
   pub fn line_iter(&self) -> LineIterator {
@@ -733,7 +811,6 @@ impl Buffer {
 #[cfg(test)]
 mod test {
   use std::fs::File;
-  use std::io;
   use std::path::Path;
 
   // Opens a buffer (new or loaded file), performs some operation on it,
@@ -779,7 +856,7 @@ mod test {
     ($name:ident, $new_file:expr, $operation:expr) => (
       #[test]
       fn $name() {
-        let test = String::from_str(stringify!($name));
+        let test = stringify!($name).to_string();
         let buffer_maker: Box<Fn() -> super::BufferResult<super::Buffer>> =
           if $new_file { Box::new(|| Ok(super::Buffer::new())) }
           else { Box::new(|| {
@@ -803,7 +880,7 @@ mod test {
       fn $name() {
         let mut tree = super::PageTree::new();
         for _ in 0..$num_pages {
-          tree.$fun(super::Page::new(String::from_str("a")));
+          tree.$fun(super::Page::new("a".to_string()));
         }
         assert!(is_balanced(&tree));
       }
@@ -825,7 +902,7 @@ mod test {
         let denominator: usize = 4;
         let mut numerator: usize = 0;
         for i in 0..$num_pages {
-          let page = super::Page::new(String::from_str("abc"));
+          let page = super::Page::new("abc".to_string());
           let fraction = (numerator as f32) / (denominator as f32);
           let offset = ((i as f32) * fraction) as usize * page.length;
           tree.insert_page_at_offset(page, offset);
@@ -862,29 +939,29 @@ mod test {
   buffer_test!(long_string_insert, true, long_string_insert_operation);
 
   fn existing_file_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str("more"), 0);
-    buffer.insert_at_offset(String::from_str(" than "), 4);
-    buffer.insert_at_offset(String::from_str("."), 25);
+    buffer.insert_at_offset("more".to_string(), 0);
+    buffer.insert_at_offset(" than ".to_string(), 4);
+    buffer.insert_at_offset(".".to_string(), 25);
     let buffer_end = buffer.tree.length - 1;
-    buffer.insert_at_offset(String::from_str(" and then some"), buffer_end);
+    buffer.insert_at_offset(" and then some".to_string(), buffer_end);
   }
 
   fn new_file_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str("Here's a second line"), 1);
-    buffer.insert_at_offset(String::from_str(" with a newline\n"), 21);
-    buffer.insert_at_offset(String::from_str("First line go here"), 0);
-    buffer.insert_at_offset(String::from_str(", and it even has a dot."), 18);
+    buffer.insert_at_offset("Here's a second line".to_string(), 1);
+    buffer.insert_at_offset(" with a newline\n".to_string(), 21);
+    buffer.insert_at_offset("First line go here".to_string(), 0);
+    buffer.insert_at_offset(", and it even has a dot.".to_string(), 18);
   }
 
   fn page_split_utf8_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str("boop"), 5);
-    buffer.insert_at_offset(String::from_str("boop"), 22);
-    buffer.insert_at_offset(String::from_str("boop"), 36);
+    buffer.insert_at_offset("boop".to_string(), 5);
+    buffer.insert_at_offset("boop".to_string(), 22);
+    buffer.insert_at_offset("boop".to_string(), 36);
   }
 
   fn long_string_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str(
-      include_str!("../tests/buffer/long_string_insert.txt")), 1);
+    buffer.insert_at_offset(
+      include_str!("../tests/buffer/long_string_insert.txt").to_string(), 1);
   }
 
   #[test]
@@ -977,5 +1054,40 @@ mod test {
       }
     }
     assert_eq!(offset, buffer.tree.length);
+  }
+
+  buffer_test!(delete_char_by_char_start, false, delete_char_by_char_start_op);
+  buffer_test!(delete_char_by_char_mid, false, delete_char_by_char_mid_op);
+  buffer_test!(delete_char_by_char_end, false, delete_char_by_char_end_op);
+  buffer_test!(delete_big_range, false, delete_big_range_op);
+  buffer_test!(delete_utf8, false, delete_utf8_op);
+
+  fn delete_char_by_char_start_op(buffer: &mut super::Buffer) {
+    for _ in 0..100 { buffer.tree.delete_range(0, 1); }
+  }
+
+  fn delete_char_by_char_mid_op(buffer: &mut super::Buffer) {
+    for _ in 0..100 { buffer.tree.delete_range(68, 69); }
+  }
+
+  fn delete_char_by_char_end_op(buffer: &mut super::Buffer) {
+    for i in 0..100 { buffer.tree.delete_range(255 - i, 256 - i); }
+  }
+
+  fn delete_big_range_op(buffer: &mut super::Buffer) {
+    buffer.delete_range(0, 227, 6, 91).ok().unwrap();
+  }
+
+  fn delete_utf8_op(buffer: &mut super::Buffer) {
+    buffer.delete_range(0, 18, 2, 144).ok().unwrap();
+  }
+
+  #[test]
+  fn delete_with_bad_input() {
+    let path = Path::new("tests/buffer/lacking_newline.txt");
+    let mut buffer = super::Buffer::open(&path).unwrap();
+    assert!(buffer.delete_range(0, 100, 1, 0).is_err());
+    assert!(buffer.delete_range(0, 0, 4, 0).is_err());
+    assert!(buffer.delete_range(2, 0, 0, 0).is_err());
   }
 }

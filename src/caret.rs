@@ -15,16 +15,35 @@ use self::unicode_width::UnicodeWidthChar as CharWidth;
 
 use buffer;
 
+/*
+ * LineUp/Down: move caret a line up or down while trying to preserve the
+ *   screen space column
+ * CharNext/Prev: move forward/backward on a line
+ * Char*Flat: like CharNext/Prev but treating the file as "flat" (disregarding
+ *   line breaks)
+ * CharNextAppending: like CharNext but allows an extra column, effectively
+ *   standing on the newline character
+ * Set: just set a position
+ * WeakSet: like Set but preserving a saved column
+ * Clamp: clamps first to a valid line then to a valid column on that line
+ */
 #[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
 pub enum Adjustment {
   LineUp,
   LineDown,
   CharNext,
+  CharNextFlat,
+  CharNextAppending,
   CharPrev,
+  CharPrevFlat,
   Set(usize, usize),
   WeakSet(usize, usize),
   Clamp,
+  FirstLine,
+  LastLine,
+  StartOfLine,
+  EndOfLine,
 }
 
 /*
@@ -53,14 +72,39 @@ impl Caret {
 
   // some adjustments may assume that the caret is in a valid position
   pub fn adjust(&mut self, adjustment: Adjustment, buffer: &buffer::Buffer) {
+    let clamp = |val, max| cmp::min(val, cmp::max(0, max) as usize);
+    let clamped_column = |line, column, buffer: &buffer::Buffer|
+      clamp(column, buffer.line_length(line).unwrap_or(0) as isize - 1);
+    let clamped_column_appending = |line, column, buffer: &buffer::Buffer|
+      clamp(column, buffer.line_length(line).unwrap_or(0) as isize);
     let (line, column) = (self.line, self.column);
     let (new_line, new_column, new_saved_column) = match adjustment {
       Adjustment::CharPrev              =>
         (line, cmp::max(0, column as isize - 1) as usize, None),
-      Adjustment::CharNext              => {
-        let line_length = buffer.line_length(line).unwrap();
-        let max_column = cmp::max(0, line_length as isize - 1) as usize;
-        (line, cmp::min(max_column, column + 1), None)
+      Adjustment::CharNext              =>
+        (line, clamped_column(line, column + 1, buffer), None),
+      Adjustment::CharNextAppending     =>
+        (line, clamped_column_appending(line, column + 1, buffer), None),
+      Adjustment::CharPrevFlat          => {
+        let (line, column) =
+          if self.column == 0 && self.line == 0 { (0, 0) }
+          else if self.column > 0 { (self.line, self.column - 1) }
+          else {
+            let line = self.line - 1;
+            buffer.line_length(line).map(|line_len| (line, line_len)).
+            unwrap_or((self.line, self.column))
+          };
+        (line, column, None)
+      }
+      Adjustment::CharNextFlat          => {
+        let is_last_line = self.line + 1 == buffer.num_lines();
+        let (line, column) =
+          buffer.line_length(self.line).map(|line_len|
+            if self.column < line_len { (self.line, self.column + 1) }
+            else if is_last_line { (self.line, self.column) }
+            else { (self.line + 1, 0) }).
+          unwrap_or((self.line, self.column));
+        (line, column, None)
       }
       Adjustment::LineUp                =>
         if line == 0 { (line, column, self.saved_column) }
@@ -73,13 +117,16 @@ impl Caret {
       Adjustment::Set(line, column)     => (line, column, None),
       Adjustment::WeakSet(line, column) => (line, column, self.saved_column),
       Adjustment::Clamp                 => {
-        let max_line = cmp::max(0, buffer.num_lines() as isize - 1) as usize;
-        let line = cmp::min(self.line, max_line);
-        let line_length = buffer.line_length(line).unwrap_or(0);
-        let column = cmp::max(0,
-          cmp::min(self.column as isize, line_length as isize - 1)) as usize;
-        (line, column, self.saved_column)
+        let line = clamp(self.line, buffer.num_lines() as isize - 1);
+        (line, clamped_column(line, self.column, buffer), self.saved_column)
       }
+      Adjustment::FirstLine             => (0, 0, None),
+      Adjustment::LastLine              => (buffer.num_lines() - 1, 0, None),
+      Adjustment::StartOfLine           => (self.line, 0, None),
+      Adjustment::EndOfLine             =>
+        buffer.line_length(self.line).map(|line_len|
+          (self.line, clamped_column(self.line, line_len, buffer), None)).
+        unwrap_or((self.line, self.column, None)),
     };
     if line != new_line || column != new_column {
       self.line = new_line;
@@ -202,6 +249,9 @@ mod test {
     caret.adjust(super::Adjustment::CharNext, &buffer);
     assert_eq!(caret.line, 14); assert_eq!(caret.column, 34);
     assert!(caret.saved_column.is_none());
+    caret.adjust(super::Adjustment::CharNextAppending, &buffer);
+    assert_eq!(caret.line, 14); assert_eq!(caret.column, 35);
+    assert!(caret.saved_column.is_none());
   }
 
   #[test]
@@ -233,6 +283,39 @@ mod test {
     assert!(caret.saved_column.is_some());
     caret.adjust(super::Adjustment::LineUp, &buffer);
     assert_eq!(caret.line, 6); assert_eq!(caret.column, 30);
+    assert!(caret.saved_column.is_none());
+  }
+
+  #[test]
+  fn adjust_flat() {
+    let buffer = buffer::Buffer::open(
+      &Path::new("tests/caret/hokey_pokey_caret.txt")).unwrap();
+    let mut caret = super::Caret::new();
+    // try backing out of file
+    caret.adjust(super::Adjustment::CharPrevFlat, &buffer);
+    assert_eq!(caret.line, 0); assert_eq!(caret.column, 0);
+    assert!(caret.saved_column.is_none());
+    // move forward
+    caret.adjust(super::Adjustment::CharNextFlat, &buffer);
+    assert_eq!(caret.line, 0); assert_eq!(caret.column, 1);
+    assert!(caret.saved_column.is_none());
+    // move forward to next line
+    caret.adjust(super::Adjustment::Set(0, 18), &buffer);
+    caret.adjust(super::Adjustment::CharNextFlat, &buffer);
+    assert_eq!(caret.line, 1); assert_eq!(caret.column, 0);
+    assert!(caret.saved_column.is_none());
+    // move back again
+    caret.adjust(super::Adjustment::CharPrevFlat, &buffer);
+    assert_eq!(caret.line, 0); assert_eq!(caret.column, 18);
+    assert!(caret.saved_column.is_none());
+    // move back
+    caret.adjust(super::Adjustment::CharPrevFlat, &buffer);
+    assert_eq!(caret.line, 0); assert_eq!(caret.column, 17);
+    assert!(caret.saved_column.is_none());
+    // try skipping out ot file
+    caret.adjust(super::Adjustment::Set(14, 35), &buffer);
+    caret.adjust(super::Adjustment::CharNextFlat, &buffer);
+    assert_eq!(caret.line, 14); assert_eq!(caret.column, 35);
     assert!(caret.saved_column.is_none());
   }
 }

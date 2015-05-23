@@ -8,6 +8,8 @@
 
 extern crate unicode_width;
 
+use std::cmp;
+
 use self::unicode_width::UnicodeWidthChar as CharWidth;
 
 use buffer;
@@ -40,6 +42,10 @@ impl View {
     self.scroll_line
   }
 
+  pub fn scroll_column(&self) -> usize {
+    self.scroll_column
+  }
+
   // assumes caret is in view
   pub fn caret_position(&self, caret: caret::Caret, buffer: &buffer::Buffer)
       -> screen::Cell {
@@ -49,9 +55,9 @@ impl View {
     screen::Cell(caret_row, caret_column as u16)
   }
 
-  pub fn add_scroll(&mut self, lines: usize, columns: usize) {
-    self.scroll_line += lines;
-    self.scroll_column += columns;
+  pub fn set_scroll(&mut self, line: usize, column: usize) {
+    self.scroll_line = line;
+    self.scroll_column = column;
   }
 
   pub fn scroll_into_view(&mut self, caret: caret::Caret,
@@ -67,13 +73,20 @@ impl View {
       else { self.scroll_line };
 
     // make sure wider characters are scrolled in entirely as well
-    let character = buffer.get_char_by_line_column(line, column).unwrap();
     let start = caret::buffer_to_screen_column(line, column, buffer);
-    let end = start + CharWidth::width(character).unwrap_or(1) - 1;
+    let end = start + buffer.get_char_by_line_column(line, column).and_then(|c|
+      CharWidth::width(c)).unwrap_or(1) - 1;
     self.scroll_column =
       if start < self.scroll_column { start }
       else if end >= self.scroll_column + cols { end - cols + 1 }
       else { self.scroll_column };
+  }
+
+  pub fn line_clamped_to_view(&self, line: usize) -> usize {
+    let screen::Size(rows, _) = self.size;
+    assert!(rows >= MIN_VIEW_SIZE);
+    let last_line = self.scroll_line + rows as usize - 1;
+    cmp::min(cmp::max(line, self.scroll_line), last_line)
   }
 
   pub fn set_size(&mut self, size: screen::Size) {
@@ -86,7 +99,6 @@ impl View {
   pub fn draw(&self, buffer: &buffer::Buffer, caret: caret::Caret,
               focused: bool, position: screen::Cell,
               screen: &mut screen::Screen) {
-    use std::cmp;
     // calculate caret screen position if focused
     let caret_cell =
       if focused { Some(position + self.caret_position(caret, buffer)) }
@@ -154,19 +166,19 @@ mod test {
       &Path::new("tests/view/scroll_into_view_double_width.txt")).unwrap();
     let mut view = super::View::new();
     view.set_size(screen::Size(1, 15));
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 0);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 0);
     caret.adjust(caret::Adjustment::Set(0, 12), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 3);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 3);
     caret.adjust(caret::Adjustment::Set(0, 16), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 9);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 9);
     caret.adjust(caret::Adjustment::Set(0, 3), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 6);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 6);
     caret.adjust(caret::Adjustment::Set(3, 10), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 3); assert_eq!(view.scroll_column, 6);
+    assert_eq!(view.scroll_line(), 3); assert_eq!(view.scroll_column(), 6);
   }
 
   #[test]
@@ -175,10 +187,20 @@ mod test {
     let buffer = buffer::Buffer::open(
       &Path::new("tests/view/caret_position.txt")).unwrap();
     let mut view = super::View::new();
-    view.add_scroll(1, 1);
+    view.set_scroll(1, 1);
     caret.adjust(caret::Adjustment::Set(1, 1), &buffer);
     assert_eq!(view.caret_position(caret, &buffer), screen::Cell(0, 1));
     caret.adjust(caret::Adjustment::Set(2, 1), &buffer);
     assert_eq!(view.caret_position(caret, &buffer), screen::Cell(1, 0));
+  }
+
+  #[test]
+  fn line_clamped_to_view() {
+    let mut view = super::View::new();
+    view.set_size(screen::Size(5, 5));
+    view.set_scroll(5, 5);
+    assert_eq!(view.line_clamped_to_view(1), 5);
+    assert_eq!(view.line_clamped_to_view(7), 7);
+    assert_eq!(view.line_clamped_to_view(10), 9);
   }
 }

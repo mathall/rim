@@ -132,7 +132,7 @@ impl Drop for Screen {
 impl Screen {
   pub fn setup() -> Result<Screen, String> {
     Terminal::new().map_or(
-      Err(String::from_str("Failed creating a terminal for stdout.")),
+      Err("Failed creating a terminal for stdout.".to_string()),
       |mut terminal| {
         terminal.enable_altscreen();
         terminal.hide_cursor();
