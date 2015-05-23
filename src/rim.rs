@@ -313,6 +313,9 @@ impl Rim {
           self.buffers.insert(id, buffer); });
         win.needs_redraw = true;
       }
+      command::WinCmd::EnterReplaceMode(replace_line) => {
+        self.set_win_cmd_mode(&replace_mode(replace_line));
+      }
       command::WinCmd::EnterInsertMode                => {
         self.set_win_cmd_mode(&win.insert_mode);
       }
@@ -355,6 +358,14 @@ impl Rim {
       }
       command::WinCmd::Insert(string)                 => {
         self.insert(string, win);
+      }
+      command::WinCmd::ReplaceLine(string)            => {
+        self.replace(string, win);
+      }
+      command::WinCmd::Replace(string)                => {
+        self.replace(string, win);
+        self.set_win_cmd_mode(&win.normal_mode);
+        self.move_caret(caret::Adjustment::CharPrev, win);
       }
       command::WinCmd::Backspace                      => {
         let mut start = win.caret().clone();
@@ -439,6 +450,14 @@ impl Rim {
        let caret = *win.caret();
        win.view_mut().scroll_into_view(caret, buffer); });
      win.needs_redraw = true;
+  }
+
+  fn replace(&mut self, string: String, win: &mut Window) {
+    let mut end = win.caret().clone();
+    self.buffers.get(&win.buf_id).map(|buffer|
+      end.adjust(caret::Adjustment::CharNextAppending, buffer));
+    self.delete_range(win.caret().clone(), end, win);
+    self.insert(string, win);
   }
 
   fn insert(&mut self, string: String, win: &mut Window) {
@@ -754,7 +773,21 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::DeleteRestOfLine));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'C', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::ChangeRestOfLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'r', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterReplaceMode(false)));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'R', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterReplaceMode(true)));
   return mode;
+}
+
+#[cfg(not(test))]
+fn key_to_string(key: keymap::Key) -> Option<String> {
+  use keymap::{Key, KeySym};
+  match key {
+    Key::Unicode{codepoint, mods: _}      => Some(format!("{}", codepoint)),
+    Key::Sym{sym: KeySym::Enter, mods: _} => Some("\n".to_string()),
+    _                                     => None,
+  }
 }
 
 #[cfg(not(test))]
@@ -771,13 +804,26 @@ fn default_insert_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::Backspace));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::Delete));
-  fn fallback(key: keymap::Key) -> Option<command::Cmd> {
-    match key {
-      Key::Unicode{codepoint, mods: _}      => Some(format!("{}", codepoint)),
-      Key::Sym{sym: KeySym::Enter, mods: _} => Some("\n".to_string()),
-      _                                     => None,
-    }.map(|string| command::Cmd::WinCmd(command::WinCmd::Insert(string)))
+  fn fallback(key: keymap::Key) -> Option<Cmd> {
+    key_to_string(key).map(|string| Cmd::WinCmd(WinCmd::Insert(string)))
   }
   mode.fallback = fallback;
+  return mode;
+}
+
+#[cfg(not(test))]
+fn replace_mode(replace_line: bool) -> command::Mode {
+  use command::{Cmd, WinCmd};
+  let mut mode = command::Mode::new();
+  fn replace_line_fallback(key: keymap::Key) -> Option<Cmd> {
+    key_to_string(key).map(|string| Cmd::WinCmd(WinCmd::ReplaceLine(string))).
+    or(Some(Cmd::WinCmd(WinCmd::EnterNormalMode)))
+  }
+  fn replace_fallback(key: keymap::Key) -> Option<Cmd> {
+    key_to_string(key).map(|string| Cmd::WinCmd(WinCmd::Replace(string))).
+    or(Some(Cmd::WinCmd(WinCmd::EnterNormalMode)))
+  }
+  mode.fallback = if replace_line { replace_line_fallback }
+                  else            { replace_fallback };
   return mode;
 }

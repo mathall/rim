@@ -340,6 +340,7 @@ pub enum Cmd {
 pub enum WinCmd {
   MoveCaret(caret::Adjustment),
   EnterNormalMode,
+  EnterReplaceMode(bool),
   EnterInsertMode,
   EnterInsertModeStartOfLine,
   EnterInsertModeAppend,
@@ -347,6 +348,8 @@ pub enum WinCmd {
   EnterInsertModeNextLine,
   EnterInsertModePreviousLine,
   OpenBuffer(PathBuf),
+  Replace(String),
+  ReplaceLine(String),
   Insert(String),
   Delete,
   Backspace,
