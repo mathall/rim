@@ -712,7 +712,7 @@ impl Buffer {
   #[cfg(test)]
   pub fn new() -> Buffer {
     let mut buffer = Buffer { path: None, tree: PageTree::new() };
-    buffer.insert_at_offset(String::from_str("\n"), 0);
+    buffer.insert_at_offset("\n".to_string(), 0);
     return buffer;
   }
 
@@ -856,7 +856,7 @@ mod test {
     ($name:ident, $new_file:expr, $operation:expr) => (
       #[test]
       fn $name() {
-        let test = String::from_str(stringify!($name));
+        let test = stringify!($name).to_string();
         let buffer_maker: Box<Fn() -> super::BufferResult<super::Buffer>> =
           if $new_file { Box::new(|| Ok(super::Buffer::new())) }
           else { Box::new(|| {
@@ -880,7 +880,7 @@ mod test {
       fn $name() {
         let mut tree = super::PageTree::new();
         for _ in 0..$num_pages {
-          tree.$fun(super::Page::new(String::from_str("a")));
+          tree.$fun(super::Page::new("a".to_string()));
         }
         assert!(is_balanced(&tree));
       }
@@ -902,7 +902,7 @@ mod test {
         let denominator: usize = 4;
         let mut numerator: usize = 0;
         for i in 0..$num_pages {
-          let page = super::Page::new(String::from_str("abc"));
+          let page = super::Page::new("abc".to_string());
           let fraction = (numerator as f32) / (denominator as f32);
           let offset = ((i as f32) * fraction) as usize * page.length;
           tree.insert_page_at_offset(page, offset);
@@ -939,29 +939,29 @@ mod test {
   buffer_test!(long_string_insert, true, long_string_insert_operation);
 
   fn existing_file_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str("more"), 0);
-    buffer.insert_at_offset(String::from_str(" than "), 4);
-    buffer.insert_at_offset(String::from_str("."), 25);
+    buffer.insert_at_offset("more".to_string(), 0);
+    buffer.insert_at_offset(" than ".to_string(), 4);
+    buffer.insert_at_offset(".".to_string(), 25);
     let buffer_end = buffer.tree.length - 1;
-    buffer.insert_at_offset(String::from_str(" and then some"), buffer_end);
+    buffer.insert_at_offset(" and then some".to_string(), buffer_end);
   }
 
   fn new_file_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str("Here's a second line"), 1);
-    buffer.insert_at_offset(String::from_str(" with a newline\n"), 21);
-    buffer.insert_at_offset(String::from_str("First line go here"), 0);
-    buffer.insert_at_offset(String::from_str(", and it even has a dot."), 18);
+    buffer.insert_at_offset("Here's a second line".to_string(), 1);
+    buffer.insert_at_offset(" with a newline\n".to_string(), 21);
+    buffer.insert_at_offset("First line go here".to_string(), 0);
+    buffer.insert_at_offset(", and it even has a dot.".to_string(), 18);
   }
 
   fn page_split_utf8_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str("boop"), 5);
-    buffer.insert_at_offset(String::from_str("boop"), 22);
-    buffer.insert_at_offset(String::from_str("boop"), 36);
+    buffer.insert_at_offset("boop".to_string(), 5);
+    buffer.insert_at_offset("boop".to_string(), 22);
+    buffer.insert_at_offset("boop".to_string(), 36);
   }
 
   fn long_string_insert_operation(buffer: &mut super::Buffer) {
-    buffer.insert_at_offset(String::from_str(
-      include_str!("../tests/buffer/long_string_insert.txt")), 1);
+    buffer.insert_at_offset(
+      include_str!("../tests/buffer/long_string_insert.txt").to_string(), 1);
   }
 
   #[test]
