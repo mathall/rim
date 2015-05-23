@@ -248,12 +248,14 @@ impl PageTree {
     assert!(!self.left.is_nil() || self.right.is_nil());
   }
 
-  // If the branches' heights differ by too much, the higher branch will have
-  // two tree nodes down its highest path. Further, those two tree nodes along
-  // with |self| has in total four affected subtrees which must keep their
-  // left-to-right order relative to each other.
-  // This method will replace |self| with a new tree with left and right each
-  // being a tree node holding the affected subtrees in their appropriate order.
+  // There are two cases when the branches' heights can differ by too much:
+  // 1) One branch is Nil and the other is a Tree. Simply replace self with the
+  // tree branch.
+  // 2) The higher branch has two tree nodes down its highest path. Further,
+  // those two tree nodes along with self has in total four affected subtrees
+  // which must keep their left-to-right order relative to each other. In this
+  // case self will be replaced with a new tree with left and right each being a
+  // tree node holding the affected subtrees in their appropriate order.
   fn ensure_balanced(&mut self) {
     let left_height = self.left.height();
     let right_height = self.right.height();
@@ -263,7 +265,13 @@ impl PageTree {
 
     // assuming the tree was well balanced before some recent insert/removal
     assert!(height_diff <= 2);
-    if height_diff == 2 {
+    if height_diff == 2 && (left_height == 0 || right_height == 0) {
+      let branch = mem::replace(
+        if self.left.is_nil() { &mut self.right } else { &mut self.left }, Nil);
+      if let Tree(new_self) = branch { mem::replace(self, *new_self); }
+      else                           { unreachable!(); }
+    }
+    else if height_diff == 2 {
 
       // keep placeholders for the affected subtrees (left to right)
       let mut t0 = Nil;
