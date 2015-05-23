@@ -341,6 +341,11 @@ pub enum WinCmd {
   MoveCaret(caret::Adjustment),
   EnterNormalMode,
   EnterInsertMode,
+  EnterInsertModeStartOfLine,
+  EnterInsertModeAppend,
+  EnterInsertModeAppendEndOfLine,
+  EnterInsertModeNextLine,
+  EnterInsertModePreviousLine,
   OpenBuffer(PathBuf),
   Insert(String),
 }

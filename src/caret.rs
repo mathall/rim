@@ -21,6 +21,7 @@ pub enum Adjustment {
   LineUp,
   LineDown,
   CharNext,
+  CharNextAppending,
   CharPrev,
   Set(usize, usize),
   WeakSet(usize, usize),
@@ -53,15 +54,19 @@ impl Caret {
 
   // some adjustments may assume that the caret is in a valid position
   pub fn adjust(&mut self, adjustment: Adjustment, buffer: &buffer::Buffer) {
+    let clamp = |val, max| cmp::min(val, cmp::max(0, max) as usize);
+    let clamped_column = |line, column, buffer: &buffer::Buffer|
+      clamp(column, buffer.line_length(line).unwrap_or(0) as isize - 1);
+    let clamped_column_appending = |line, column, buffer: &buffer::Buffer|
+      clamp(column, buffer.line_length(line).unwrap_or(0) as isize);
     let (line, column) = (self.line, self.column);
     let (new_line, new_column, new_saved_column) = match adjustment {
       Adjustment::CharPrev              =>
         (line, cmp::max(0, column as isize - 1) as usize, None),
-      Adjustment::CharNext              => {
-        let line_length = buffer.line_length(line).unwrap();
-        let max_column = cmp::max(0, line_length as isize - 1) as usize;
-        (line, cmp::min(max_column, column + 1), None)
-      }
+      Adjustment::CharNext              =>
+        (line, clamped_column(line, column + 1, buffer), None),
+      Adjustment::CharNextAppending     =>
+        (line, clamped_column_appending(line, column + 1, buffer), None),
       Adjustment::LineUp                =>
         if line == 0 { (line, column, self.saved_column) }
         else { self.vertical_caret_movement(line, line - 1, buffer) },
@@ -73,12 +78,8 @@ impl Caret {
       Adjustment::Set(line, column)     => (line, column, None),
       Adjustment::WeakSet(line, column) => (line, column, self.saved_column),
       Adjustment::Clamp                 => {
-        let max_line = cmp::max(0, buffer.num_lines() as isize - 1) as usize;
-        let line = cmp::min(self.line, max_line);
-        let line_length = buffer.line_length(line).unwrap_or(0);
-        let column = cmp::max(0,
-          cmp::min(self.column as isize, line_length as isize - 1)) as usize;
-        (line, column, self.saved_column)
+        let line = clamp(self.line, buffer.num_lines() as isize - 1);
+        (line, clamped_column(line, self.column, buffer), self.saved_column)
       }
     };
     if line != new_line || column != new_column {
@@ -201,6 +202,9 @@ mod test {
     assert!(caret.saved_column.is_none());
     caret.adjust(super::Adjustment::CharNext, &buffer);
     assert_eq!(caret.line, 14); assert_eq!(caret.column, 34);
+    assert!(caret.saved_column.is_none());
+    caret.adjust(super::Adjustment::CharNextAppending, &buffer);
+    assert_eq!(caret.line, 14); assert_eq!(caret.column, 35);
     assert!(caret.saved_column.is_none());
   }
 

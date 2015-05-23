@@ -282,16 +282,11 @@ impl Rim {
 
   fn handle_win_cmd(&mut self, cmd: command::WinCmd, win: &mut Window) {
     match cmd {
-      command::WinCmd::MoveCaret(adjustment) => {
-        self.buffers.get(&win.buf_id).map(|buffer| {
-          win.caret_mut().adjust(adjustment, buffer);
-          let caret = *win.caret();
-          win.view_mut().scroll_into_view(caret, buffer); });
-        win.needs_redraw = true;
+      command::WinCmd::MoveCaret(adjustment)          => {
+        self.move_caret(adjustment, win);
       }
-      command::WinCmd::EnterNormalMode       => {
-        self.cmd_thread.set_mode(win.normal_mode.clone(), 1).ok().expect(
-          "Command thread died.");
+      command::WinCmd::EnterNormalMode                => {
+        self.set_win_cmd_mode(&win.normal_mode);
         let id = win.buf_id;
         self.buffers.remove(&id).map(|buffer| {
           win.caret_mut().adjust(caret::Adjustment::Clamp, &buffer);
@@ -302,10 +297,38 @@ impl Rim {
           self.buffers.insert(id, buffer); });
         win.needs_redraw = true;
       }
-      command::WinCmd::EnterInsertMode       =>
-        self.cmd_thread.set_mode(win.insert_mode.clone(), 1).ok().expect(
-          "Command thread died."),
-      command::WinCmd::OpenBuffer(path)      => {
+      command::WinCmd::EnterInsertMode                => {
+        self.set_win_cmd_mode(&win.insert_mode);
+      }
+      command::WinCmd::EnterInsertModeStartOfLine     => {
+        self.move_caret(caret::Adjustment::Set(win.caret().line(), 0), win);
+        self.set_win_cmd_mode(&win.insert_mode);
+      }
+      command::WinCmd::EnterInsertModeAppend          => {
+        self.move_caret(caret::Adjustment::CharNextAppending, win);
+        self.set_win_cmd_mode(&win.insert_mode);
+      }
+      command::WinCmd::EnterInsertModeAppendEndOfLine => {
+        let col = self.buffers.get(&win.buf_id).map(|buf|
+          buf.line_length(win.caret().line()).unwrap()).unwrap();
+        self.move_caret(caret::Adjustment::Set(win.caret().line(), col), win);
+        self.set_win_cmd_mode(&win.insert_mode);
+      }
+      command::WinCmd::EnterInsertModeNextLine        => {
+        let col = self.buffers.get(&win.buf_id).map(|buf|
+          buf.line_length(win.caret().line()).unwrap()).unwrap();
+        self.move_caret(caret::Adjustment::Set(win.caret().line(), col), win);
+        self.insert("\n".to_string(), win);
+        self.set_win_cmd_mode(&win.insert_mode);
+      }
+      command::WinCmd::EnterInsertModePreviousLine    => {
+        let line = win.caret().line();
+        self.move_caret(caret::Adjustment::Set(line, 0), win);
+        self.insert("\n".to_string(), win);
+        self.move_caret(caret::Adjustment::Set(line, 0), win);
+        self.set_win_cmd_mode(&win.insert_mode);
+      }
+      command::WinCmd::OpenBuffer(path)               => {
         self.load_buffer(path.as_path()).map(|buf_id| {
           win.set_buf_id(buf_id);
           let screen::Rect(_, size) = win.rect;
@@ -314,53 +337,70 @@ impl Rim {
             let caret = *win.caret();
             win.view_mut().scroll_into_view(caret, buffer) }); });
       }
-      command::WinCmd::Insert(string)        => {
-        self.buffers.remove(&win.buf_id).map(|mut buffer| {
-          let (insert_line, insert_col) =
-            (win.caret().line(), win.caret().column());
-          // update windows displaying the buffer, character by character
-          let (mut c_line, mut c_col) = (insert_line, insert_col);
-          for c in string.chars() {
-            let newline = c == '\n';
-            // update the caret of the focused window
-            let (new_line, new_col) =
-              if newline { (win.caret().line() + 1, 0) }
-              else       { (win.caret().line(), win.caret().column() + 1) };
-            win.caret_mut().adjust(
-              caret::Adjustment::Set(new_line, new_col), &buffer);
-            // update other windows which has viewed the buffer
-            let id = win.buf_id;
-            for (_, win) in self.windows.iter_mut() {
-              if !win.has_buf_id(id) { continue }
-              // keep the content of other views still if possible
-              if win.view_for(id).unwrap().scroll_line() > c_line && newline {
-                win.view_mut_for(id).unwrap().add_scroll(1, 0);
-              }
-              // update caret of other window
-              let (cur_line, cur_col) =
-                win.caret_for(id).map(|c| (c.line(), c.column())).unwrap();
-              let (new_line, new_col) =
-                if c_line < cur_line && newline { (cur_line + 1, cur_col) }
-                else if cur_line == c_line && c_col <= cur_col {
-                  if !newline { (cur_line, cur_col + 1) }
-                  else { (cur_line, if c_col == 0 { 0 } else { c_col - 1 }) } }
-                else { (cur_line, cur_col) };
-              win.caret_mut_for(id).unwrap().adjust(
-                caret::Adjustment::WeakSet(new_line, new_col), &buffer);
-              win.needs_redraw = true;
-            }
-            if newline { c_line += 1; } else { c_col += 1; }
-          }
-          // insert string into buffer
-          buffer.insert_at_line_column(string, insert_line, insert_col).ok().
-            expect("View had invalid caret.");
-          // ensure the caret is in the view
-          let caret = *win.caret();
-          win.view_mut().scroll_into_view(caret, &buffer);
-          win.needs_redraw = true;
-          self.buffers.insert(win.buf_id, buffer); });
+      command::WinCmd::Insert(string)                 => {
+        self.insert(string, win);
       }
     }
+  }
+
+  fn set_win_cmd_mode(&mut self, mode: &command::Mode) {
+    self.cmd_thread.set_mode(mode.clone(), 1).ok().
+    expect("Command thread died.");
+  }
+
+  fn move_caret(&mut self, adjustment: caret::Adjustment, win: &mut Window) {
+     self.buffers.get(&win.buf_id).map(|buffer| {
+       win.caret_mut().adjust(adjustment, buffer);
+       let caret = *win.caret();
+       win.view_mut().scroll_into_view(caret, buffer); });
+     win.needs_redraw = true;
+  }
+
+  fn insert(&mut self, string: String, win: &mut Window) {
+    self.buffers.remove(&win.buf_id).map(|mut buffer| {
+      let (insert_line, insert_col) =
+        (win.caret().line(), win.caret().column());
+      // update windows displaying the buffer, character by character
+      let (mut c_line, mut c_col) = (insert_line, insert_col);
+      for c in string.chars() {
+        let newline = c == '\n';
+        // update the caret of the focused window
+        let (new_line, new_col) =
+          if newline { (win.caret().line() + 1, 0) }
+          else       { (win.caret().line(), win.caret().column() + 1) };
+        win.caret_mut().adjust(
+          caret::Adjustment::Set(new_line, new_col), &buffer);
+        // update other windows which has viewed the buffer
+        let id = win.buf_id;
+        for (_, win) in self.windows.iter_mut() {
+          if !win.has_buf_id(id) { continue }
+          // keep the content of other views still if possible
+          if win.view_for(id).unwrap().scroll_line() > c_line && newline {
+            win.view_mut_for(id).unwrap().add_scroll(1, 0);
+          }
+          // update caret of other window
+          let (cur_line, cur_col) =
+            win.caret_for(id).map(|c| (c.line(), c.column())).unwrap();
+          let (new_line, new_col) =
+            if c_line < cur_line && newline { (cur_line + 1, cur_col) }
+            else if cur_line == c_line && c_col <= cur_col {
+              if !newline { (cur_line, cur_col + 1) }
+              else { (cur_line, if c_col == 0 { 0 } else { c_col - 1 }) } }
+            else { (cur_line, cur_col) };
+          win.caret_mut_for(id).unwrap().adjust(
+            caret::Adjustment::WeakSet(new_line, new_col), &buffer);
+          win.needs_redraw = true;
+        }
+        if newline { c_line += 1; } else { c_col += 1; }
+      }
+      // insert string into buffer
+      buffer.insert_at_line_column(string, insert_line, insert_col).ok().
+        expect("View had invalid caret.");
+      // ensure the caret is in the view
+      let caret = *win.caret();
+      win.view_mut().scroll_into_view(caret, &buffer);
+      win.needs_redraw = true;
+      self.buffers.insert(win.buf_id, buffer); });
   }
 }
 
@@ -506,8 +546,20 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineUp)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineDown)));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Insert, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterInsertMode));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'i', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertMode));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'I', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterInsertModeStartOfLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterInsertModeAppend));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'A', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterInsertModeAppendEndOfLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'o', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterInsertModeNextLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'O', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::EnterInsertModePreviousLine));
   mode.keychain.bind(&[Key::Fn{num: 1, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/rim.rs"))));
   mode.keychain.bind(&[Key::Fn{num: 2, mods: keymap::MOD_NONE}],
