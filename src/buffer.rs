@@ -656,7 +656,18 @@ impl Buffer {
     PageStream::new(path).
     and_then(PageTree::build).
     and_then(|tree| Ok(Buffer { path: Some(path.to_path_buf()), tree: tree })).
+    map(|mut buffer| { buffer.ensure_ends_with_newline(); buffer }).
     map_err(|io_err| BufferError::IoError(io_err))
+  }
+
+  fn ensure_ends_with_newline(&mut self) {
+    let ends_with_newline = self.tree.length > 0 &&
+      self.tree.get_char_by_offset(self.tree.length - 1).map(|c| c == '\n').
+      expect("Found no last character in buffer of non-zero length.");
+    if !ends_with_newline {
+      let offset = self.tree.length;
+      self.insert_at_offset("\n".to_string(), offset);
+    }
   }
 
   pub fn write(&self) -> BufferResult<()> {
@@ -703,26 +714,14 @@ impl Buffer {
     self.tree.get_char_by_line_column(line, column)
   }
 
-  // if the file doesn't end with a newline, the characters after the last
-  // newline will still be counted as just another line
   pub fn num_lines(&self) -> usize {
-    if self.tree.length == 0 { 0 } else {
-      let borked_last_line = self.tree.get_char_by_offset(self.tree.length - 1).
-                             map(|c| c != '\n').unwrap();
-      self.tree.newlines + if borked_last_line { 1 } else { 0 }
-    }
+    self.tree.newlines
   }
 
-  // excludes newline character from the count if the line has one
+  // excludes newline character from the count
   pub fn line_length(&self, line: usize) -> Option<usize> {
-    if self.tree.length == 0 { None } else {
-      self.tree.line_start_and_end_offset(line).
-      map(|(start_offset, end_offset)| {
-        assert!(start_offset < end_offset);
-        let borked_line = self.tree.get_char_by_offset(end_offset - 1).
-                          map(|c| c != '\n').unwrap();
-        end_offset - start_offset - if borked_line { 0 } else { 1 } })
-    }
+    self.tree.line_start_and_end_offset(line).and_then(|(start, end)|
+      if start >= end { None } else { Some(end - start - 1) })
   }
 
   pub fn line_iter(&self) -> LineIterator {
