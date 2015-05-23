@@ -40,6 +40,10 @@ impl View {
     self.scroll_line
   }
 
+  pub fn scroll_column(&self) -> usize {
+    self.scroll_column
+  }
+
   // assumes caret is in view
   pub fn caret_position(&self, caret: caret::Caret, buffer: &buffer::Buffer)
       -> screen::Cell {
@@ -49,9 +53,9 @@ impl View {
     screen::Cell(caret_row, caret_column as u16)
   }
 
-  pub fn add_scroll(&mut self, lines: usize, columns: usize) {
-    self.scroll_line += lines;
-    self.scroll_column += columns;
+  pub fn set_scroll(&mut self, line: usize, column: usize) {
+    self.scroll_line = line;
+    self.scroll_column = column;
   }
 
   pub fn scroll_into_view(&mut self, caret: caret::Caret,
@@ -154,19 +158,19 @@ mod test {
       &Path::new("tests/view/scroll_into_view_double_width.txt")).unwrap();
     let mut view = super::View::new();
     view.set_size(screen::Size(1, 15));
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 0);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 0);
     caret.adjust(caret::Adjustment::Set(0, 12), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 3);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 3);
     caret.adjust(caret::Adjustment::Set(0, 16), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 9);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 9);
     caret.adjust(caret::Adjustment::Set(0, 3), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column, 6);
+    assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 6);
     caret.adjust(caret::Adjustment::Set(3, 10), &buffer);
     view.scroll_into_view(caret, &buffer);
-    assert_eq!(view.scroll_line(), 3); assert_eq!(view.scroll_column, 6);
+    assert_eq!(view.scroll_line(), 3); assert_eq!(view.scroll_column(), 6);
   }
 
   #[test]
@@ -175,7 +179,7 @@ mod test {
     let buffer = buffer::Buffer::open(
       &Path::new("tests/view/caret_position.txt")).unwrap();
     let mut view = super::View::new();
-    view.add_scroll(1, 1);
+    view.set_scroll(1, 1);
     caret.adjust(caret::Adjustment::Set(1, 1), &buffer);
     assert_eq!(view.caret_position(caret, &buffer), screen::Cell(0, 1));
     caret.adjust(caret::Adjustment::Set(2, 1), &buffer);

@@ -340,6 +340,66 @@ impl Rim {
       command::WinCmd::Insert(string)                 => {
         self.insert(string, win);
       }
+      command::WinCmd::Backspace                      => {
+        let mut start = win.caret().clone();
+        self.buffers.get(&win.buf_id).map(|buffer|
+          start.adjust(caret::Adjustment::CharPrevFlat, buffer));
+        self.delete_range(start, win.caret().clone(), win);
+      }
+      command::WinCmd::Delete                         => {
+        let mut end = win.caret().clone();
+        self.buffers.get(&win.buf_id).map(|buffer|
+          end.adjust(caret::Adjustment::CharNextFlat, buffer));
+        self.delete_range(win.caret().clone(), end, win);
+      }
+      command::WinCmd::BackspaceOnLine                => {
+        let mut start = win.caret().clone();
+        self.buffers.get(&win.buf_id).map(|buffer|
+          start.adjust(caret::Adjustment::CharPrev, buffer));
+        self.delete_range(start, win.caret().clone(), win);
+      }
+      command::WinCmd::DeleteOnLine                   => {
+        let mut end = win.caret().clone();
+        self.buffers.get(&win.buf_id).map(|buffer|
+          end.adjust(caret::Adjustment::CharNextAppending, buffer));
+        self.delete_range(win.caret().clone(), end, win);
+        self.move_caret(caret::Adjustment::Clamp, win);
+      }
+      command::WinCmd::DeleteLine                     => {
+        let mut start = win.caret().clone();
+        let mut end = win.caret().clone();
+        let mut last_line = false;
+        self.buffers.get(&win.buf_id).map(|buffer| {
+          let line = win.caret().line();
+          let line_len = buffer.line_length(line).unwrap();
+          last_line = line + 1 == buffer.num_lines();
+          start.adjust(caret::Adjustment::Set(line, 0), buffer);
+          end.adjust(caret::Adjustment::Set(line, line_len), buffer);
+          if !last_line { end.adjust(caret::Adjustment::CharNextFlat, buffer); }
+          else { start.adjust(caret::Adjustment::CharPrevFlat, buffer); } });
+        self.delete_range(start, end, win);
+        if last_line {
+          self.move_caret(caret::Adjustment::Set(win.caret().line(), 0), win);
+        }
+      }
+      command::WinCmd::DeleteRestOfLine               => {
+        let mut end = win.caret().clone();
+        self.buffers.get(&win.buf_id).map(|buffer| {
+          let line = win.caret().line();
+          let line_len = buffer.line_length(line).unwrap();
+          end.adjust(caret::Adjustment::Set(line, line_len), buffer) });
+        self.delete_range(win.caret().clone(), end, win);
+        self.move_caret(caret::Adjustment::Clamp, win);
+      }
+      command::WinCmd::ChangeRestOfLine               => {
+        let mut end = win.caret().clone();
+        self.buffers.get(&win.buf_id).map(|buffer| {
+          let line = win.caret().line();
+          let line_len = buffer.line_length(line).unwrap();
+          end.adjust(caret::Adjustment::Set(line, line_len), buffer) });
+        self.delete_range(win.caret().clone(), end, win);
+        self.set_win_cmd_mode(&win.insert_mode);
+      }
     }
   }
 
@@ -375,8 +435,11 @@ impl Rim {
         for (_, win) in self.windows.iter_mut() {
           if !win.has_buf_id(id) { continue }
           // keep the content of other views still if possible
-          if win.view_for(id).unwrap().scroll_line() > c_line && newline {
-            win.view_mut_for(id).unwrap().add_scroll(1, 0);
+          let (scroll_line, scroll_col) = win.view_for(id).map(|v|
+            (v.scroll_line(), v.scroll_column())).unwrap();
+          if scroll_line > c_line && newline {
+            win.view_mut_for(id).unwrap().set_scroll(
+              scroll_line + 1, scroll_col);
           }
           // update caret of other window
           let (cur_line, cur_col) =
@@ -400,6 +463,57 @@ impl Rim {
       let caret = *win.caret();
       win.view_mut().scroll_into_view(caret, &buffer);
       win.needs_redraw = true;
+      self.buffers.insert(win.buf_id, buffer); });
+  }
+
+  fn delete_range(&mut self, start: caret::Caret, end: caret::Caret,
+                  win: &mut Window) {
+    self.buffers.remove(&win.buf_id).map(|mut buffer| {
+      let (start_line, start_col) = (start.line(), start.column());
+      let (end_line, end_col) = (end.line(), end.column());
+      if buffer.delete_range(start_line, start_col, end_line, end_col).is_ok() {
+        // update other windows which has viewed the buffer
+        let id = win.buf_id;
+        for (_, win) in self.windows.iter_mut() {
+          if !win.has_buf_id(id) { continue }
+          // keep the content of other views still if possible
+          let (scroll_line, scroll_col) = win.view_for(id).map(|v|
+            (v.scroll_line(), v.scroll_column())).unwrap();
+          let new_scroll_line = if scroll_line <= start_line { scroll_line }
+                                else if scroll_line <= end_line { start_line }
+                                else { scroll_line - end_line + start_line };
+          win.view_mut_for(id).unwrap().set_scroll(new_scroll_line, scroll_col);
+          // update caret of other window
+          let (cur_line, cur_col) =
+            win.caret_for(id).map(|c| (c.line(), c.column())).unwrap();
+          let clamped_start_col = if start_col > 0 { start_col - 1 } else { 0 };
+          let new_col =
+            if cur_line < start_line || cur_line > end_line { cur_col }
+            else if start_line == end_line {
+              if cur_col < start_col { cur_col }
+              else if cur_col < end_col { clamped_start_col }
+              else { cur_col - end_col + start_col } }
+            else {
+              if cur_line == start_line {
+                if cur_col < start_col { cur_col } else { clamped_start_col } }
+              else if cur_line == end_line && cur_col >= end_col {
+                cur_col - end_col + start_col }
+              else { 0 } };
+          let new_line =
+            if cur_line >= start_line && cur_line <= end_line { start_line }
+            else if cur_line > end_line { cur_line - end_line + start_line }
+            else { cur_line };
+          win.caret_mut_for(id).unwrap().adjust(
+            caret::Adjustment::WeakSet(new_line, new_col), &buffer);
+          win.needs_redraw = true;
+        }
+        // update the caret of the focused window and scroll it into view
+        win.caret_mut().adjust(
+          caret::Adjustment::Set(start_line, start_col), &buffer);
+        let caret = *win.caret();
+        win.view_mut().scroll_into_view(caret, &buffer);
+        win.needs_redraw = true;
+      }
       self.buffers.insert(win.buf_id, buffer); });
   }
 }
@@ -568,6 +682,19 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/command.rs"))));
   mode.keychain.bind(&[Key::Fn{num: 4, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/frame.rs"))));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::DeleteOnLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::DeleteOnLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'X', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::BackspaceOnLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::DeleteLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'D', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::DeleteRestOfLine));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'C', mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::ChangeRestOfLine));
   return mode;
 }
 
@@ -578,6 +705,13 @@ fn default_insert_mode() -> command::Mode {
   let mut mode = command::Mode::new();
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Escape, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterNormalMode));
+  mode.keychain.bind(
+    &[Key::Sym{sym: KeySym::Backspace, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::Backspace));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Del, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::Backspace));
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::Delete));
   fn fallback(key: keymap::Key) -> Option<command::Cmd> {
     match key {
       Key::Unicode{codepoint, mods: _}      => Some(format!("{}", codepoint)),

@@ -348,6 +348,13 @@ pub enum WinCmd {
   EnterInsertModePreviousLine,
   OpenBuffer(PathBuf),
   Insert(String),
+  Delete,
+  Backspace,
+  DeleteOnLine,
+  BackspaceOnLine,
+  DeleteLine,
+  DeleteRestOfLine,
+  ChangeRestOfLine,
 }
 
 #[cfg(test)]
