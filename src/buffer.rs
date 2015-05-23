@@ -248,6 +248,41 @@ impl PageTree {
     assert!(!self.left.is_nil() || self.right.is_nil());
   }
 
+  // Will delete from the start offset to either the end offset, or if the range
+  // is spanning multiple pages, to the end of the page containing the start
+  // offset. This way only one page is affected by a call to delete_range,
+  // meaning no merges but possible deletion of single leafs, and the tree can
+  // rebalance itself as necessary. Returns the deleted amount.
+  fn delete_range(&mut self, start: usize, end: usize) -> usize {
+    assert!(start < end && start <= self.length);
+    let deleted = {
+      let (go_left, new_start) = self.decide_branch_by_offset(start);
+      let new_end = end - (start - new_start);
+      let branch = if go_left { &mut self.left } else { &mut self.right };
+      let (new_branch, deleted) = match mem::replace(branch, Nil) {
+        Nil            => panic!("Attempted deleting from Nil node"),
+        Tree(mut tree) => {
+          let deleted = tree.delete_range(new_start, new_end);
+          // if a leaf was removed from the tree, lift the tree's other child
+          let new_branch = if tree.left.is_nil() { tree.right }
+                           else if tree.right.is_nil() { tree.left }
+                           else { Tree(tree) };
+          (new_branch, deleted)
+        },
+        Leaf(mut page) => {
+          let deleted = page.delete_range(new_start, new_end);
+          (if page.length == 0 { Nil } else { Leaf(page) }, deleted)
+        },
+      };
+      mem::replace(branch, new_branch);
+      deleted
+    };
+    if self.left.is_nil() { mem::swap(&mut self.left, &mut self.right); }
+    self.update_caches();
+    self.ensure_balanced();
+    return deleted;
+  }
+
   // There are two cases when the branches' heights can differ by too much:
   // 1) One branch is Nil and the other is a Tree. Simply replace self with the
   // tree branch.
@@ -504,6 +539,26 @@ impl Page {
     self.update_caches();
   }
 
+  fn delete_range(&mut self, start: usize, end: usize) -> usize {
+    assert!(start <= self.data.chars().count());
+    let deleted = cmp::min(end, self.length) - start;
+    unsafe {
+      let start = self.data.slice_chars(0, start).len();
+      let end = if end < self.length { self.data.slice_chars(0, end).len() }
+                else                 { self.data.len() };
+      // before truncating, shift down the string's ending if anything is left
+      if end < self.data.len() {
+        ptr::copy(self.data.as_bytes().as_ptr().offset(end as isize),
+                  self.data.as_mut_vec().as_mut_ptr().offset(start as isize),
+                  self.data.len() - end);
+      }
+      let new_len = self.data.len() - end + start;
+      self.data.as_mut_vec().truncate(new_len);
+    }
+    self.update_caches();
+    return deleted;
+  }
+
   fn update_caches(&mut self) {
     self.length = self.data.chars().count();
     self.newline_offsets.clear();
@@ -714,6 +769,20 @@ impl Buffer {
     else {
       self.tree.insert_string_at_offset(string, offset);
     }
+  }
+
+  pub fn delete_range(&mut self, start_line: usize, start_column: usize,
+                      end_line: usize, end_column: usize) -> BufferResult<()> {
+    self.tree.line_column_to_offset(start_line, start_column).
+    and_then(|start|
+      self.tree.line_column_to_offset(end_line, end_column).
+      and_then(|end| if end < self.tree.length { Some(end) } else { None }).
+      map(|end| (start, end))).
+    and_then(|(start, end)|
+      if start < end { Some((start, end)) } else { None }).
+    map(|(start, mut end)|
+      while start < end { end -= self.tree.delete_range(start, end); } ).
+    ok_or(BufferError::BadLocation)
   }
 
   pub fn get_char_by_line_column(&self, line: usize, column: usize)
@@ -983,5 +1052,40 @@ mod test {
       }
     }
     assert_eq!(offset, buffer.tree.length);
+  }
+
+  buffer_test!(delete_char_by_char_start, false, delete_char_by_char_start_op);
+  buffer_test!(delete_char_by_char_mid, false, delete_char_by_char_mid_op);
+  buffer_test!(delete_char_by_char_end, false, delete_char_by_char_end_op);
+  buffer_test!(delete_big_range, false, delete_big_range_op);
+  buffer_test!(delete_utf8, false, delete_utf8_op);
+
+  fn delete_char_by_char_start_op(buffer: &mut super::Buffer) {
+    for _ in 0..100 { buffer.tree.delete_range(0, 1); }
+  }
+
+  fn delete_char_by_char_mid_op(buffer: &mut super::Buffer) {
+    for _ in 0..100 { buffer.tree.delete_range(68, 69); }
+  }
+
+  fn delete_char_by_char_end_op(buffer: &mut super::Buffer) {
+    for i in 0..100 { buffer.tree.delete_range(255 - i, 256 - i); }
+  }
+
+  fn delete_big_range_op(buffer: &mut super::Buffer) {
+    buffer.delete_range(0, 227, 6, 91).ok().unwrap();
+  }
+
+  fn delete_utf8_op(buffer: &mut super::Buffer) {
+    buffer.delete_range(0, 18, 2, 144).ok().unwrap();
+  }
+
+  #[test]
+  fn delete_with_bad_input() {
+    let path = Path::new("tests/buffer/lacking_newline.txt");
+    let mut buffer = super::Buffer::open(&path).unwrap();
+    assert!(buffer.delete_range(0, 100, 1, 0).is_err());
+    assert!(buffer.delete_range(0, 0, 4, 0).is_err());
+    assert!(buffer.delete_range(2, 0, 0, 0).is_err());
   }
 }
