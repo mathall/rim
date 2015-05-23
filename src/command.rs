@@ -348,6 +348,7 @@ pub enum WinCmd {
   EnterInsertModeNextLine,
   EnterInsertModePreviousLine,
   OpenBuffer(PathBuf),
+  SaveBuffer,
   Replace(String),
   ReplaceLine(String),
   Insert(String),

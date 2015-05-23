@@ -356,6 +356,10 @@ impl Rim {
             let caret = *win.caret();
             win.view_mut().scroll_into_view(caret, buffer) }); });
       }
+      command::WinCmd::SaveBuffer                     => {
+        self.buffers.get(&win.buf_id).map(|buffer|
+          buffer.write().ok().expect("Failed to save buffer."));
+      }
       command::WinCmd::Insert(string)                 => {
         self.insert(string, win);
       }
@@ -777,6 +781,9 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::EnterReplaceMode(false)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'R', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterReplaceMode(true)));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL}
+                      ,Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL}],
+    Cmd::WinCmd(WinCmd::SaveBuffer));
   return mode;
 }
 
