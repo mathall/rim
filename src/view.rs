@@ -71,9 +71,9 @@ impl View {
       else { self.scroll_line };
 
     // make sure wider characters are scrolled in entirely as well
-    let character = buffer.get_char_by_line_column(line, column).unwrap();
     let start = caret::buffer_to_screen_column(line, column, buffer);
-    let end = start + CharWidth::width(character).unwrap_or(1) - 1;
+    let end = start + buffer.get_char_by_line_column(line, column).and_then(|c|
+      CharWidth::width(c)).unwrap_or(1) - 1;
     self.scroll_column =
       if start < self.scroll_column { start }
       else if end >= self.scroll_column + cols { end - cols + 1 }
