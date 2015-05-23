@@ -7,7 +7,6 @@
  */
 
 #![feature(collections)]
-#![feature(libc)]
 #![feature(slice_patterns)]
 #![feature(std_misc)]
 

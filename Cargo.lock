@@ -3,6 +3,7 @@ name = "rim"
 version = "0.0.1"
 dependencies = [
  "bitflags 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
+ "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "term 0.2.7 (registry+https://github.com/rust-lang/crates.io-index)",
  "termkey 0.17.5 (git+git://github.com/mathall/termkey-rs.git)",
  "unicode-width 0.1.1 (registry+https://github.com/rust-lang/crates.io-index)",
