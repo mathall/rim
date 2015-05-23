@@ -200,6 +200,7 @@ impl PageTree {
     self.ensure_balanced();
   }
 
+  #[cfg(test)]
   fn prepend_page(&mut self, page: Page) {
     self.insert_page_at_offset(page, 0);
   }
@@ -708,6 +709,7 @@ pub struct Buffer {
 }
 
 impl Buffer {
+  #[cfg(test)]
   pub fn new() -> Buffer {
     let mut buffer = Buffer { path: None, tree: PageTree::new() };
     buffer.insert_at_offset(String::from_str("\n"), 0);
@@ -747,6 +749,7 @@ impl Buffer {
     map_err(|io_err| BufferError::IoError(io_err))
   }
 
+  #[cfg(not(test))]
   pub fn path(&self) -> BufferResult<&Path> {
     self.path.as_ref().map(|path| path.as_path()).ok_or(BufferError::NoPath)
   }
@@ -808,7 +811,6 @@ impl Buffer {
 #[cfg(test)]
 mod test {
   use std::fs::File;
-  use std::io;
   use std::path::Path;
 
   // Opens a buffer (new or loaded file), performs some operation on it,

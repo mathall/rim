@@ -21,7 +21,6 @@ use std::path::{Path, PathBuf};
 #[cfg(not(test))]
 use std::thread;
 
-#[allow(dead_code, unused_imports)]  // temporary until buffer is used for real
 mod buffer;
 mod caret;
 mod command;
