@@ -278,7 +278,6 @@ impl PageTree {
         &mut Tree(ref mut mid)  => {
           let left_height = mid.left.height();
           let right_height = mid.right.height();
-          assert!(left_height != right_height);
           let then_go_left = left_height > right_height;
           match if then_go_left { &mut mid.left } else { &mut mid.right } {
             &mut Nil | &mut Leaf(_) => unreachable!(),
