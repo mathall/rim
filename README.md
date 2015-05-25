@@ -3,7 +3,7 @@ Rim is an aspiring Vim-like text editor written in Rust.
 
 ![Screenshot](screenshot.png)
 
-![TravisCI status](https://travis-ci.org/thachmai/rim.svg?branch=github)
+![TravisCI status](https://travis-ci.org/mathall/rim.svg?branch=github)
 
 ## Current state
 Rim is in an early prototype stage. This means that you can load, edit and save files, and hopefully do so relatively comfortably if Vim is what you are used to. In particular some of the simpler commands for insertion and deletion as well as window and buffer navigation has been implemented and bound to the expected key strokes.
