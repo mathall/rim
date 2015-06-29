@@ -102,7 +102,7 @@ pub enum KeySym
 }
 
 bitflags! {
-  #[derive(Debug)]
+  #[cfg_attr(test, derive(Debug))]
   flags KeyMod: u8 {
     const MOD_NONE  = 0,
     const MOD_SHIFT = 1 << 0,
