@@ -6,9 +6,12 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#![feature(collections)]
+#![feature(mpsc_select)]
+#![feature(slice_chars)]
 #![feature(slice_patterns)]
-#![feature(std_misc)]
+
+#![cfg_attr(test, feature(permutations))]
+#![cfg_attr(test, feature(vecmap))]
 
 #[macro_use]
 extern crate bitflags;
