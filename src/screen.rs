@@ -244,7 +244,7 @@ impl ScreenBuffer {
  */
 #[cfg(not(test))]
 struct Terminal {
-  terminal: Box<term::Terminal<::std::io::Stdout> + Send>,
+  terminal: Box<term::StdoutTerminal>,
 }
 
 #[cfg(not(test))]

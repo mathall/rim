@@ -29,6 +29,7 @@ use buffer;
  */
 #[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
+#[cfg_attr(test, allow(dead_code))]  // tests don't make use of all these
 pub enum Adjustment {
   LineUp,
   LineDown,

@@ -1126,6 +1126,7 @@ mod test {
   // For every split descriptor, setup then tear down the frame in every
   // possible way.. limited to 100 ways. Because come on. We don't got all day.
   // And of course check invariants along the way.
+  #[allow(deprecated)]
   #[test]
   fn split_and_close() {
     for descriptor_nr in 0..SPLIT_DESCRIPTORS.len() {
