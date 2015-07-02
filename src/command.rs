@@ -327,6 +327,7 @@ pub enum Cmd {
   GrowWindow(frame::Orientation),
   ShrinkWindow(frame::Orientation),
   CloseWindow,
+  QuitWindow,
   Quit,
   WinCmd(WinCmd),
 }
