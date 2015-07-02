@@ -268,6 +268,13 @@ impl Rim {
         self.resize_window(orientation, -10),
       command::Cmd::CloseWindow               =>
         self.close_window(),
+      command::Cmd::QuitWindow                => {
+        if self.windows.len() == 1 {
+          self.quit = true;
+        } else {
+          self.close_window();
+        }
+      }
       command::Cmd::Quit                      =>
         { self.quit = true; }
       command::Cmd::WinCmd(cmd)               => {
@@ -685,6 +692,16 @@ fn default_mode() -> command::Mode {
     Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
     Cmd::Quit);
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL}
+                      ,Key::Unicode{codepoint: 'q', mods: keymap::MOD_CTRL}],
+    Cmd::QuitWindow);
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL}
+                      ,Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
+    Cmd::QuitWindow);
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE}
+                      ,Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}
+                      ,Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
+    Cmd::QuitWindow);
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Right, mods: keymap::MOD_NONE}],
