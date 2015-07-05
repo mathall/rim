@@ -686,7 +686,10 @@ fn default_mode() -> command::Mode {
     Cmd::ShiftFocus(frame::WindowOrder::NextWindow));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'N', mods: keymap::MOD_NONE}],
     Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
     Cmd::Quit);
   mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
                        Key::Unicode{codepoint: 'q', mods: keymap::MOD_CTRL}],
