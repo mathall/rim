@@ -16,8 +16,8 @@ Window navigation
 - `<C-w>v/<C-w>s` - Split focused window
 - `<C-w>c` - Close focused window
 - `<C-w> h/j/k/l` - Move window focus left/down/up/right
-- `n/N` - Move window focus forward/backward in window order
-- `(<C->) y/u` - Resize focused window
+- `n/N` - Move window focus forward/backward in window order (for testing)
+- `(<C->) y/u` - Resize focused window (for testing)
 - `<C-w>=` - Reset window sizes
 
 Buffer navigation
@@ -51,10 +51,11 @@ Deletion
 - `r` - Replace character under the cursor
 - `R` - Replace character on the line
 
-Misc
-- `q` - Quit
+Misc / For testing until a proper command line is implemented
 - `F1-F4` - Load some buffers
-- `<C-w><C-w>` - Write buffer to file
+- `:qa<Enter>` - Quit
+- `:q<Enter>` - Close window and quit if it's the last one
+- `:w<Enter>` - Write buffer to file
 
 ## What's next?
 Lots! But first maybe the ability to search in a buffer, which would open up for a range of other features.. or perhaps that big scary one; scripting
