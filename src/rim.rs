@@ -674,32 +674,11 @@ fn default_mode() -> command::Mode {
   mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
                        Key::Unicode{codepoint: '=', mods: keymap::MOD_NONE}],
     Cmd::ResetLayout);
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_NONE}],
-    Cmd::GrowWindow(frame::Orientation::Horizontal));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_CTRL}],
-    Cmd::ShrinkWindow(frame::Orientation::Horizontal));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_NONE}],
-    Cmd::GrowWindow(frame::Orientation::Vertical));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
-    Cmd::ShrinkWindow(frame::Orientation::Vertical));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'n', mods: keymap::MOD_NONE}],
-    Cmd::ShiftFocus(frame::WindowOrder::NextWindow));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'N', mods: keymap::MOD_NONE}],
-    Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
-  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
-    Cmd::Quit);
   mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
                        Key::Unicode{codepoint: 'q', mods: keymap::MOD_CTRL}],
     Cmd::QuitWindow);
   mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
                        Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
-    Cmd::QuitWindow);
-  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE},
-                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
     Cmd::QuitWindow);
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
@@ -717,6 +696,29 @@ fn default_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::PageUp));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Pagedown, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::PageDown));
+  // for testing purposes
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_NONE}],
+    Cmd::GrowWindow(frame::Orientation::Horizontal));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_CTRL}],
+    Cmd::ShrinkWindow(frame::Orientation::Horizontal));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_NONE}],
+    Cmd::GrowWindow(frame::Orientation::Vertical));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
+    Cmd::ShrinkWindow(frame::Orientation::Vertical));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'n', mods: keymap::MOD_NONE}],
+    Cmd::ShiftFocus(frame::WindowOrder::NextWindow));
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'N', mods: keymap::MOD_NONE}],
+    Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
+  // for convenience until a proper command line is implemented
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
+    Cmd::Quit);
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE},
+                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
+    Cmd::QuitWindow);
   mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
                        Key::Unicode{codepoint: 'w', mods: keymap::MOD_NONE},
                        Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
@@ -777,14 +779,6 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::HalfPageUp));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: keymap::MOD_CTRL}],
     Cmd::WinCmd(WinCmd::HalfPageDown));
-  mode.keychain.bind(&[Key::Fn{num: 1, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/rim.rs"))));
-  mode.keychain.bind(&[Key::Fn{num: 2, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/buffer.rs"))));
-  mode.keychain.bind(&[Key::Fn{num: 3, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/command.rs"))));
-  mode.keychain.bind(&[Key::Fn{num: 4, mods: keymap::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/frame.rs"))));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::DeleteOnLine));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE}],
@@ -802,6 +796,15 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::EnterReplaceMode(false)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'R', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterReplaceMode(true)));
+  // for testing purposes
+  mode.keychain.bind(&[Key::Fn{num: 1, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/rim.rs"))));
+  mode.keychain.bind(&[Key::Fn{num: 2, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/buffer.rs"))));
+  mode.keychain.bind(&[Key::Fn{num: 3, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/command.rs"))));
+  mode.keychain.bind(&[Key::Fn{num: 4, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/frame.rs"))));
   return mode;
 }
 
