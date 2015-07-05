@@ -717,6 +717,10 @@ fn default_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::PageUp));
   mode.keychain.bind(&[Key::Sym{sym: KeySym::Pagedown, mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::PageDown));
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
+                       Key::Unicode{codepoint: 'w', mods: keymap::MOD_NONE},
+                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
+    Cmd::WinCmd(WinCmd::SaveBuffer));
   return mode;
 }
 
@@ -798,9 +802,6 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::EnterReplaceMode(false)));
   mode.keychain.bind(&[Key::Unicode{codepoint: 'R', mods: keymap::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterReplaceMode(true)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL}
-                      ,Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL}],
-    Cmd::WinCmd(WinCmd::SaveBuffer));
   return mode;
 }
 
