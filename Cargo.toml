@@ -12,7 +12,9 @@ git = "git://github.com/mathall/termkey-rs.git"
 
 [dependencies]
 bitflags = "*"
+docopt = "*"
 libc = "*"
+rustc-serialize = "*"
 term = "*"
 unicode-width = "*"
 uuid = "*"

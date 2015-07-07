@@ -15,6 +15,8 @@
 
 #[macro_use]
 extern crate bitflags;
+extern crate docopt;
+extern crate rustc_serialize;
 
 #[cfg(not(test))]
 use std::collections::HashMap;
@@ -571,7 +573,34 @@ impl Rim {
 }
 
 #[cfg(not(test))]
+static USAGE: &'static str = "
+Rim - Vim-style text editor.
+
+Usage:
+  rim [<file>]
+  rim -h | --help
+  rim --version
+
+Options:
+  -h --help        Show this screen.
+  --version        Show version.
+";
+
+#[cfg(not(test))]
+#[derive(RustcDecodable)]
+struct Args {
+  arg_file: Option<String>,
+  flag_version: bool,
+}
+
+#[cfg(not(test))]
 fn main() {
+  let args: Args = docopt::Docopt::new(USAGE).and_then(|d| d.decode()).
+                   unwrap_or_else(|e| e.exit());
+  if args.flag_version {
+    println!("Rim - {}", env!("CARGO_PKG_VERSION"));
+    return;
+  }
   let mut screen = screen::Screen::setup().unwrap();
 
   let (key_tx, key_rx) = std::sync::mpsc::channel();
@@ -579,8 +608,9 @@ fn main() {
 
   let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
   cmd_tx.send(command::Cmd::ResetLayout).unwrap();
+  let filename = args.arg_file.unwrap_or("src/rim.rs".to_string());
   cmd_tx.send(command::Cmd::WinCmd(command::WinCmd::OpenBuffer(
-    PathBuf::from("src/rim.rs")))).unwrap();
+    PathBuf::from(&filename)))).unwrap();
   let cmd_thread = command::start(cmd_tx);
 
   let mut rim = Rim::new(cmd_thread);
