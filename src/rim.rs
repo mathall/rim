@@ -16,6 +16,9 @@
 #[macro_use]
 extern crate bitflags;
 
+extern crate rustc_serialize;
+extern crate docopt;
+
 #[cfg(not(test))]
 use std::collections::HashMap;
 #[cfg(not(test))]
@@ -570,8 +573,33 @@ impl Rim {
   }
 }
 
+static USAGE: &'static str = "
+Rim - Vim-style text editor.
+
+Usage:
+  rim (-h | --help)
+  rim --version
+  rim [<file>]
+
+Options:
+  -h --help        Show this screen.
+  -v --version     Show version.
+";
+
+#[derive(RustcDecodable, Debug)]
+pub struct Args {
+  pub arg_file: String,
+  pub flag_version: bool,
+}
+
 #[cfg(not(test))]
 fn main() {
+  let args: Args = docopt::Docopt::new(USAGE).and_then(|d| d.decode()).ok().
+      expect("failed to parse command line");
+  if args.flag_version {
+    println!("Rim - {}", env!("CARGO_PKG_VERSION"));
+    return;
+  }
   let mut screen = screen::Screen::setup().unwrap();
 
   let (key_tx, key_rx) = std::sync::mpsc::channel();
@@ -579,8 +607,9 @@ fn main() {
 
   let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
   cmd_tx.send(command::Cmd::ResetLayout).unwrap();
+  let filename: &str = if args.arg_file.is_empty() { "src/rim.rs" } else { &args.arg_file };
   cmd_tx.send(command::Cmd::WinCmd(command::WinCmd::OpenBuffer(
-    PathBuf::from("src/rim.rs")))).unwrap();
+    PathBuf::from(filename)))).unwrap();
   let cmd_thread = command::start(cmd_tx);
 
   let mut rim = Rim::new(cmd_thread);
