@@ -6,6 +6,8 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+extern crate core;
+
 use std::cmp;
 use std::error;
 use std::fmt;
@@ -16,6 +18,7 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
+use self::core::str::StrExt;
 use self::PageTreeNode::*;
 
 #[cfg(not(test))]

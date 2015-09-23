@@ -953,7 +953,10 @@ fn adjacent_window_point(rect: screen::Rect, direction: Direction)
  */
 #[cfg(test)]
 mod test {
-  use std::collections::VecMap;
+  extern crate rand;
+  extern crate vec_map;
+
+  use self::vec_map::VecMap;
 
   use screen;
 
@@ -1123,20 +1126,24 @@ mod test {
     return (frame, ctx, windows);
   }
 
-  // For every split descriptor, setup then tear down the frame in every
-  // possible way.. limited to 100 ways. Because come on. We don't got all day.
-  // And of course check invariants along the way.
-  #[allow(deprecated)]
+  // Tear down frames in random window order, checking invariants along the way.
   #[test]
   fn split_and_close() {
+    use self::rand;
+    let mut rng = rand::thread_rng();
+    let select_window = |rng: &mut rand::ThreadRng, windows: &mut Vec<usize>| {
+      let selected = *rand::sample(rng, windows.iter(), 1)[0];
+      windows.retain(|&x| x != selected);
+      return selected; };
     for descriptor_nr in 0..SPLIT_DESCRIPTORS.len() {
       let num_windows = SPLIT_DESCRIPTORS[descriptor_nr].len() + 1;
-      let window_nrs: Vec<usize> = (0..num_windows).collect();
-      for window_nrs in window_nrs.permutations().take(100) {
+      for _ in 0..100 {
+        let mut window_nrs: Vec<usize> = (0..num_windows).collect();
         let (mut frame, mut ctx, windows) = setup_frame(descriptor_nr);
-        let close_last = window_nrs[0];
-        for &window_nr in window_nrs.iter().skip(1) {
-          frame.close_window(&mut ctx, &windows[window_nr]).unwrap();
+        let close_last = select_window(&mut rng, &mut window_nrs);
+        while !window_nrs.is_empty() {
+          let close_nr = select_window(&mut rng, &mut window_nrs);
+          frame.close_window(&mut ctx, &windows[close_nr]).unwrap();
           check_frame_invariants(&frame, &ctx);
         }
         assert_eq!(Err(super::FrameError::CantCloseLastWindow),
