@@ -6,11 +6,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-use std::collections::{HashMap, VecDeque, VecMap};
+extern crate vec_map;
+
+use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::path::PathBuf;
 use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
+
+use self::vec_map::VecMap;
 
 use caret;
 use frame;

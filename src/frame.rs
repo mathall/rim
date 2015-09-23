@@ -953,7 +953,9 @@ fn adjacent_window_point(rect: screen::Rect, direction: Direction)
  */
 #[cfg(test)]
 mod test {
-  use std::collections::VecMap;
+  extern crate vec_map;
+
+  use self::vec_map::VecMap;
 
   use screen;
 

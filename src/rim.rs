@@ -11,7 +11,6 @@
 #![feature(slice_patterns)]
 
 #![cfg_attr(test, feature(permutations))]
-#![cfg_attr(test, feature(vecmap))]
 
 #[macro_use]
 extern crate bitflags;
