@@ -11,8 +11,6 @@
 #![feature(mpsc_select)]
 #![feature(slice_patterns)]
 
-#![cfg_attr(test, feature(permutations))]
-
 #[macro_use]
 extern crate bitflags;
 extern crate docopt;

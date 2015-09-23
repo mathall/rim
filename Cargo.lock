@@ -5,6 +5,7 @@ dependencies = [
  "bitflags 0.3.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "docopt 0.6.67 (registry+https://github.com/rust-lang/crates.io-index)",
  "libc 0.1.8 (registry+https://github.com/rust-lang/crates.io-index)",
+ "rand 0.3.8 (registry+https://github.com/rust-lang/crates.io-index)",
  "rustc-serialize 0.3.15 (registry+https://github.com/rust-lang/crates.io-index)",
  "term 0.2.10 (registry+https://github.com/rust-lang/crates.io-index)",
  "termkey 0.17.5 (git+git://github.com/mathall/termkey-rs.git)",
