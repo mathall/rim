@@ -6,8 +6,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+#![feature(core)]
+#![feature(core_str_ext)]
 #![feature(mpsc_select)]
-#![feature(slice_chars)]
 #![feature(slice_patterns)]
 
 #![cfg_attr(test, feature(permutations))]
