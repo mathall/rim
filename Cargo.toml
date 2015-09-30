@@ -7,7 +7,7 @@ authors = [ "Mathias Hällman <rim@mths.se>" ]
 [[bin]]
 name = "rim"
 
-[dependencies.termkey]
+[dependencies.termkey-rs]
 git = "git://github.com/mathall/termkey-rs.git"
 
 [dependencies]
