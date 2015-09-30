@@ -6,8 +6,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate core;
-
 use std::cmp;
 use std::error;
 use std::fmt;
@@ -18,7 +16,6 @@ use std::mem;
 use std::path::{Path, PathBuf};
 use std::ptr;
 
-use self::core::str::StrExt;
 use self::PageTreeNode::*;
 
 #[cfg(not(test))]
@@ -523,9 +520,14 @@ impl Page {
     return page;
   }
 
+  fn byte_offset(&self, offset: usize) -> usize {
+    self.data.char_indices().take(offset).last().map(
+      |(i, c)| i + c.len_utf8()).unwrap_or(0)
+  }
+
   fn insert_string_at_offset(&mut self, string: String, offset: usize) {
     assert!(offset <= self.data.chars().count());
-    let byte_offset = self.data.slice_chars(0, offset).len() as isize;
+    let byte_offset = self.byte_offset(offset) as isize;
     let original_size = self.data.len();
     let string_size = string.len();
     self.data.push_str(&string);  // first grow organically
@@ -547,8 +549,8 @@ impl Page {
     assert!(start <= self.data.chars().count());
     let deleted = cmp::min(end, self.length) - start;
     unsafe {
-      let start = self.data.slice_chars(0, start).len();
-      let end = if end < self.length { self.data.slice_chars(0, end).len() }
+      let start = self.byte_offset(start);
+      let end = if end < self.length { self.byte_offset(end) }
                 else                 { self.data.len() };
       // before truncating, shift down the string's ending if anything is left
       if end < self.data.len() {
