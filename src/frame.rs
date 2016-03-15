@@ -619,7 +619,7 @@ impl error::Error for FrameError {
   }
 }
 
-type FrameResult<T> = Result<T, FrameError>;
+pub type FrameResult<T> = Result<T, FrameError>;
 
 #[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
@@ -1427,7 +1427,7 @@ mod test {
     let expectations: Vec<(super::WindowId, screen::Size)> =
       (0..windows.len()).map(|win| {
         let window = windows[win].clone();
-        let change = window_changes.get(&win).map(|&x| x).unwrap_or(0);
+        let change = window_changes.get(win).map(|&x| x).unwrap_or(0);
         let screen::Rect(_, screen::Size(rows, cols)) =
           frame.get_window_rect(ctx, &window).unwrap();
         (window, if orientation == Vertical {

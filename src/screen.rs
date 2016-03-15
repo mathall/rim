@@ -352,14 +352,12 @@ impl Color {
 mod term_size {
   extern crate libc;
 
-  use self::libc::funcs::bsd44::ioctl;
-
   const STDOUT_FILENO: libc::c_int = 1;
 
   #[cfg(target_os = "macos")]
   const TIOCGWINSZ: libc::c_ulong = 0x40087468;
   #[cfg(target_os = "linux")]
-  const TIOCGWINSZ: libc::c_int = 0x5413;
+  const TIOCGWINSZ: libc::c_ulong = 0x5413;
 
   pub fn size() -> Option<(u16, u16)> {
     #[allow(dead_code)]  // not interested in pixel sizes
@@ -372,7 +370,7 @@ mod term_size {
 
     unsafe {
       let mut size = WinSize { rows: 0, cols: 0, h_pixels: 0, v_pixels: 0 };
-      match ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut size) {
+      match libc::ioctl(STDOUT_FILENO, TIOCGWINSZ, &mut size) {
         0 => Some((size.rows, size.cols)),
         _ => None,
       }
