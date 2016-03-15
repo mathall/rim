@@ -20,6 +20,8 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 #[cfg(not(test))]
 use std::thread;
+#[cfg(not(test))]
+use std::time::Duration;
 
 mod buffer;
 mod caret;
@@ -617,7 +619,7 @@ fn main() {
   let (draw_pulse_tx, draw_pulse_rx) = std::sync::mpsc::channel();
   thread::spawn(move || {
     loop {
-      thread::sleep_ms(33);
+      thread::sleep(Duration::from_millis(33));
       if draw_pulse_tx.send(()).is_err() { break; }
     }
   });

@@ -435,7 +435,7 @@ impl<'l> Iterator for PageTreeIterator<'l> {
  * CharIterator iterates the characters of a page tree between the given start
  * and end offsets.
  */
-struct CharIterator<'l> {
+pub struct CharIterator<'l> {
   counter: usize,
   pages: PageTreeIterator<'l>,
   chars: Option<::std::str::Chars<'l>>,
@@ -473,7 +473,7 @@ impl<'l> Iterator for CharIterator<'l> {
  * LineIterator iterates the lines of a page tree, yielding a CharIterator for
  * each line.
  */
-struct LineIterator<'l> {
+pub struct LineIterator<'l> {
   tree: &'l PageTree,
   next_line: usize
 }

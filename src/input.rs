@@ -231,6 +231,7 @@ mod test {
   use std::mem;
   use std::sync::mpsc::{channel, Sender};
   use std::thread;
+  use std::time::Duration;
 
   use keymap;
 
@@ -296,7 +297,7 @@ mod test {
         }
 
         // give termkey a chance to parse escape as a standalone key
-        thread::sleep_ms(1);
+        thread::sleep(Duration::from_millis(1));
       }
       // keep the pipe alive until we're finished with it
       close_writer_rx.recv().unwrap();
@@ -305,7 +306,10 @@ mod test {
 
     // receive key outputs and match with expectations
     let (timeout_tx, timeout_rx) = channel();
-    thread::spawn(move || { thread::sleep_ms(100); timeout_tx.send(()).ok(); });
+    thread::spawn(move || {
+      thread::sleep(Duration::from_millis(100));
+      timeout_tx.send(()).ok();
+    });
     for output in outputs.iter() {
       select!(
         key = key_rx.recv()   => { assert_eq!(key.unwrap(), *output); },
