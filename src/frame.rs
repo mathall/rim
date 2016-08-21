@@ -559,7 +559,7 @@ impl<'l> LeafSectionIterator<'l> {
     let done_with_root = path.first().map(|go| go == self.side).unwrap_or(true);
 
     // unwind the path until there's an unexplored section of interest waiting
-    loop { if path.pop().map(|v| v != self.side).unwrap_or(true) { break } }
+    while let Some(side) = path.pop() { if side != self.side { break } }
 
     if path.len() == 0 && done_with_root {
       // we got back to the root and we've already been down each side, all done

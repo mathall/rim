@@ -618,10 +618,7 @@ fn main() {
   // attempt to redraw at a regular interval
   let (draw_pulse_tx, draw_pulse_rx) = std::sync::mpsc::channel();
   thread::spawn(move || {
-    loop {
-      thread::sleep(Duration::from_millis(33));
-      if draw_pulse_tx.send(()).is_err() { break; }
-    }
+    while let Ok(_) = draw_pulse_tx.send(()) { thread::sleep(Duration::from_millis(33)); }
   });
 
   loop {
