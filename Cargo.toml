@@ -18,5 +18,5 @@ rand = "*"
 rustc-serialize = "*"
 term = "*"
 unicode-width = "*"
-uuid = "*"
+uuid = { version = "*", features = ["v4"] }
 vec_map = "*"
