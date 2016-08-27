@@ -9,7 +9,6 @@
 extern crate unicode_width;
 
 use std::cmp;
-use std::ops::Add;
 
 use self::unicode_width::UnicodeWidthChar as CharWidth;
 
@@ -169,8 +168,7 @@ impl Caret {
 pub fn buffer_to_screen_column(line: usize, column: usize,
                                buffer: &buffer::Buffer) -> usize {
   buffer.line_iter().from(line).next().map(|chars|
-    chars.take(column).map(|c| CharWidth::width(c).unwrap_or(0)).
-                       fold(0, Add::add)).
+    chars.take(column).map(|c| CharWidth::width(c).unwrap_or(0)).sum()).
   unwrap_or(0)
 }
 
