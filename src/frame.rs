@@ -576,7 +576,7 @@ impl<'l> LeafSectionIterator<'l> {
 impl<'l> Iterator for LeafSectionIterator<'l> {
   type Item = SectionPath;
 
-  fn next(&mut self) -> Option<SectionPath> {
+  fn next(&mut self) -> Option<Self::Item> {
     let ret = self.next.clone();
     self.next =
       self.next.as_ref().and_then(|last| self.find_next(last.clone()));

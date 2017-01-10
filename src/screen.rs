@@ -99,7 +99,7 @@ impl CellIterator {
 impl Iterator for CellIterator {
   type Item = Cell;
 
-  fn next(&mut self) -> Option<Cell> {
+  fn next(&mut self) -> Option<Self::Item> {
     let ret = self.next_cell;
     self.next_cell = self.next_cell.and_then(|cell|
       (cell + Cell(0, 1)).within(self.size).or(

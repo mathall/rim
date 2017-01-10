@@ -424,7 +424,7 @@ impl<'l> PageTreeIterator<'l> {
 impl<'l> Iterator for PageTreeIterator<'l> {
   type Item = &'l Page;
 
-  fn next(&mut self) -> Option<&'l Page> {
+  fn next(&mut self) -> Option<Self::Item> {
     self.tree.find_page_by_offset(self.next_offset).map(
       |(page, offset)| { self.next_offset = offset + page.length; page })
   }
@@ -458,7 +458,7 @@ impl<'l> CharIterator<'l> {
 impl<'l> Iterator for CharIterator<'l> {
   type Item = char;
 
-  fn next(&mut self) -> Option<char> {
+  fn next(&mut self) -> Option<Self::Item> {
     if self.counter == 0 { None } else {
       self.counter -= 1;
       self.chars.as_mut().and_then(|ref mut chars| chars.next()).or_else(|| {
@@ -491,7 +491,7 @@ impl<'l> LineIterator<'l> {
 impl<'l> Iterator for LineIterator<'l> {
   type Item = CharIterator<'l>;
 
-  fn next(&mut self) -> Option<CharIterator<'l>> {
+  fn next(&mut self) -> Option<Self::Item> {
     self.tree.line_start_and_end_offset(self.next_line).
     and_then(|(start, end)| if start != end { Some((start, end)) }
                             else            { None }).
@@ -607,7 +607,7 @@ impl StringChunkerator {
 impl Iterator for StringChunkerator {
   type Item = String;
 
-  fn next(&mut self) -> Option<String> {
+  fn next(&mut self) -> Option<Self::Item> {
     // cut out a chunk of |self.chunk_size| bytes and hope it's a valid string
     let mut chunk: Vec<u8> =
       self.data.iter().take(self.chunk_size).map(|&b| b).collect();
@@ -660,7 +660,7 @@ impl PageStream {
 impl Iterator for PageStream {
   type Item = Page;
 
-  fn next(&mut self) -> Option<Page> {
+  fn next(&mut self) -> Option<Self::Item> {
     use std::ops::DerefMut;
     use std::io::SeekFrom;
     let mut data = Box::new([0; PAGE_SIZE]);
