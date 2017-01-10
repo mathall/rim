@@ -571,7 +571,7 @@ impl Rim {
 }
 
 #[cfg(not(test))]
-static USAGE: &'static str = "
+const USAGE: &'static str = "
 Rim - Vim-style text editor.
 
 Usage:
