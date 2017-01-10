@@ -378,8 +378,7 @@ impl PageTree {
 
   // Optionally returns the page containing a certain offset along with total
   // offset building up to the start of it.
-  fn find_page_by_offset<'l>(&'l self, offset: usize)
-      -> Option<(&'l Page, usize)> {
+  fn find_page_by_offset(&self, offset: usize) -> Option<(&Page, usize)> {
     if offset >= self.length { return None; }
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
     let res = match if go_left { &self.left } else { &self.right } {
