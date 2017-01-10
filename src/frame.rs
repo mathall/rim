@@ -93,7 +93,7 @@ impl SectionPath {
 #[cfg_attr(test, derive(Debug, Eq))]
 enum SectionSide {
   Fst, // Top / Left
-  Snd,  // Bottom / Right
+  Snd, // Bottom / Right
 }
 
 /*

@@ -837,9 +837,9 @@ fn default_normal_mode() -> command::Mode {
 fn key_to_string(key: keymap::Key) -> Option<String> {
   use keymap::{Key, KeySym};
   match key {
-    Key::Unicode{codepoint, mods: _}      => Some(format!("{}", codepoint)),
-    Key::Sym{sym: KeySym::Enter, mods: _} => Some("\n".to_string()),
-    _                                     => None,
+    Key::Unicode{codepoint, .. }      => Some(format!("{}", codepoint)),
+    Key::Sym{sym: KeySym::Enter, .. } => Some("\n".to_string()),
+    _                                 => None,
   }
 }
 

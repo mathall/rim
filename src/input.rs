@@ -131,15 +131,15 @@ fn input_loop(kill_rx: Receiver<()>, died_tx: Sender<()>,
 
 fn translate_key(key: TermKeyEvent) -> Option<keymap::Key> {
   match key {
-    TermKeyEvent::FunctionEvent{num, mods}                =>
+    TermKeyEvent::FunctionEvent{num, mods}           =>
       Some(keymap::Key::Fn{num: num, mods: translate_mods(mods)}),
-    TermKeyEvent::KeySymEvent{sym, mods}                  =>
+    TermKeyEvent::KeySymEvent{sym, mods}             =>
       Some(keymap::Key::Sym{
         sym: translate_sym(sym), mods: translate_mods(mods)}),
-    TermKeyEvent::UnicodeEvent{codepoint, mods, utf8:_}   =>
+    TermKeyEvent::UnicodeEvent{codepoint, mods, .. } =>
       Some(keymap::Key::Unicode{
         codepoint: codepoint, mods: translate_mods(mods)}),
-    _                                                     =>
+    _                                                =>
       None,
   }
 }

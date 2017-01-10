@@ -384,7 +384,7 @@ impl PageTree {
     let res = match if go_left { &self.left } else { &self.right } {
       &Nil            => None,
       &Tree(ref tree) => tree.find_page_by_offset(new_offset),
-      &Leaf(ref page) => Some((&*page, 0)),
+      &Leaf(ref page) => Some((page, 0)),
     };
     res.map(|(page, offset)|
       (page, offset + if go_left { 0 } else { self.left.length() }))
