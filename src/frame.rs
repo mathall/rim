@@ -12,7 +12,6 @@ use std::cmp;
 use std::collections::{HashMap, vec_deque, VecDeque};
 use std::error;
 use std::fmt;
-use std::mem;
 
 use screen;
 
@@ -267,7 +266,7 @@ impl Section {
       // branch found, shift the edge of the other branch to take up the size of
       // the branch being cut, then cut it by replacing the current split with
       // that of the other branch
-      self.split = mem::replace(&mut self.split, None).and_then(|mut split| {
+      self.split = self.split.take().and_then(|mut split| {
         let (either, other) =
           if side == Fst { (&mut split.fst, &mut split.snd) }
           else           { (&mut split.snd, &mut split.fst) };
@@ -277,7 +276,7 @@ impl Section {
           (BORDER_SIZE as isize + size as isize);
         other.shift_edge(split.orientation.opposite(), side, shift);
         assert_eq!(self.size, other.size);
-        mem::replace(&mut other.split, None) }) });
+        other.split.take() }) });
   }
 
   // Gets the aligning base of the section identified by |path|.
