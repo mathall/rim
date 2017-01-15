@@ -39,22 +39,13 @@ const MAX_PAGE_SIZE: usize = (PAGE_SIZE as f64 * 1.5) as usize;
  * characters unless otherwise specified.
  */
 enum PageTreeNode {
-  Tree(Box<PageTree>),
+  Tree(PageTree),
   Leaf(Page),
-  Nil,
 }
 
 impl PageTreeNode {
-  fn is_nil(&self) -> bool {
-    match *self {
-      Nil => true,
-      _   => false,
-    }
-  }
-
   fn length(&self) -> usize {
     match *self {
-      Nil            => 0,
       Tree(ref tree) => tree.length,
       Leaf(ref page) => page.length,
     }
@@ -62,7 +53,6 @@ impl PageTreeNode {
 
   fn newlines(&self) -> usize {
     match *self {
-      Nil            => 0,
       Tree(ref tree) => tree.newlines,
       Leaf(ref page) => page.newline_offsets.len(),
     }
@@ -70,16 +60,39 @@ impl PageTreeNode {
 
   fn height(&self) -> usize {
     match *self {
-      Nil            => 0,
       Tree(ref tree) => tree.height,
       Leaf(_)        => 1
     }
   }
 }
 
+type PageTreeLink = Option<Box<PageTreeNode>>;
+
+// This trait is a convenience that allows us to query a PageTreeLink for
+// certain information whether there's a node there or not.
+trait PageTreeLinkFuncs {
+  fn length(&self) -> usize;
+  fn newlines(&self) -> usize;
+  fn height(&self) -> usize;
+}
+
+impl PageTreeLinkFuncs for PageTreeLink {
+  fn length(&self) -> usize {
+    self.as_ref().map(|node| node.length()).unwrap_or(0)
+  }
+
+  fn newlines(&self) -> usize {
+    self.as_ref().map(|node| node.newlines()).unwrap_or(0)
+  }
+
+  fn height(&self) -> usize {
+    self.as_ref().map(|node| node.height()).unwrap_or(0)
+  }
+}
+
 struct PageTree {
-  left: PageTreeNode,
-  right: PageTreeNode,
+  left: PageTreeLink,
+  right: PageTreeLink,
   length: usize,  // cached length of pages down the subtrees
   newlines: usize,  // cached numer of newlines in the pages down the subtrees
   height: usize,  // cached height of the tree
@@ -87,7 +100,7 @@ struct PageTree {
 
 impl PageTree {
   fn new() -> PageTree {
-    PageTree { left: Nil, right: Nil, length: 0, newlines: 0, height: 1 }
+    PageTree { left: None, right: None, length: 0, newlines: 0, height: 1 }
   }
 
   fn build(mut stream: PageStream) -> io::Result<PageTree> {
@@ -127,13 +140,15 @@ impl PageTree {
     let (go_left, new_line) = self.decide_branch_by_line(line);
     let (branch, other) = if go_left { (&self.left, &self.right) }
                           else       { (&self.right, &self.left) };
-    match branch {
-      &Nil            => if new_line == 0 { Some(0) } else { None },
-      &Tree(ref tree) => tree.offset_of_line_start(new_line),
-      &Leaf(ref page) =>
-        if new_line == 0 { Some(0) }
-        else { page.offset_of_newline(new_line - 1).map(|offset| offset + 1) }
-    }.map(|offset| offset + if go_left { 0 } else { other.length() })
+    branch.as_ref().and_then(|node|
+        match *node {
+          box Tree(ref tree) => tree.offset_of_line_start(new_line),
+          box Leaf(ref page) =>
+            if new_line == 0 { Some(0) }
+            else { page.offset_of_newline(new_line - 1).map(|ofs| ofs + 1) }
+        }).
+      or(if new_line == 0 { Some(0) } else { None }).
+      map(|offset| offset + if go_left { 0 } else { other.length() })
   }
 
   fn get_char_by_line_column(&self, line: usize, column: usize)
@@ -144,11 +159,12 @@ impl PageTree {
 
   fn get_char_by_offset(&self, offset: usize) -> Option<char> {
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
-    match if go_left { &self.left } else { &self.right } {
-      &Nil            => None,
-      &Tree(ref tree) => tree.get_char_by_offset(new_offset),
-      &Leaf(ref page) => page.data.chars().nth(new_offset),
-    }
+    let branch = if go_left { &self.left } else { &self.right };
+    branch.as_ref().and_then(|node|
+        match *node {
+          box Tree(ref tree) => tree.get_char_by_offset(new_offset),
+          box Leaf(ref page) => page.data.chars().nth(new_offset),
+        })
   }
 
   fn insert_string_at_offset(&mut self, string: String, offset: usize) {
@@ -161,40 +177,47 @@ impl PageTree {
       let (branch, other) = if go_left { (&mut self.left, &mut self.right) }
                             else       { (&mut self.right, &mut self.left) };
 
-      let new_branch = match mem::replace(branch, Nil) {
-        Nil            => Leaf(Page::new(string)),
-        Tree(mut tree) => {
-          tree.insert_string_at_offset(string, new_offset);
-          Tree(tree)
-        },
-        Leaf(mut page) => {
-          page.insert_string_at_offset(string, new_offset);
-          // split the page if it got too big
-          if page.data.as_bytes().len() > MAX_PAGE_SIZE {
-            let (page, next_page) = page.split();
-            assert!(page.data.len() <= MAX_PAGE_SIZE);
-            assert!(next_page.data.len() <= MAX_PAGE_SIZE);
-            // avoid splitting the leaf if there's place in the other branch
-            if other.is_nil() {
-              let (page, other_page) =
-                if go_left { (page, next_page) } else { (next_page, page) };
-              *other = Leaf(other_page);
-              Leaf(page)
-            }
-            else {
-              let mut new_subtree = PageTree::new();
-              let right_offset = page.length;
-              new_subtree.insert_page_at_offset(page, 0);
-              new_subtree.insert_page_at_offset(next_page, right_offset);
-              Tree(Box::new(new_subtree))
-            }
-          }
-          else {
-            Leaf(page)
-          }
-        }
+      // perform the insertion
+      match *branch {
+        None                         =>
+          *branch = Some(Box::new(Leaf(Page::new(string)))),
+        Some(box Tree(ref mut tree)) =>
+          tree.insert_string_at_offset(string, new_offset),
+        Some(box Leaf(ref mut page)) =>
+          page.insert_string_at_offset(string, new_offset),
+      }
+
+      // decide whether to split a page
+      let split_page = match *branch {
+        Some(box Leaf(ref page)) => page.data.as_bytes().len() > MAX_PAGE_SIZE,
+        _                        => false,
       };
-      mem::replace(branch, new_branch);
+
+      // split the page if it got too big
+      if split_page {
+        branch.as_mut().or_else(|| unreachable!()).map(|boxed_node| {
+            let node = mem::replace(&mut **boxed_node, Tree(PageTree::new()));
+            **boxed_node = if let Leaf(page) = node {
+              let (page, next_page) = page.split();
+              assert!(page.data.len() <= MAX_PAGE_SIZE);
+              assert!(next_page.data.len() <= MAX_PAGE_SIZE);
+              // avoid splitting the leaf if there's place in the other branch
+              if other.is_none() {
+                let (page, other_page) =
+                  if go_left { (page, next_page) } else { (next_page, page) };
+                *other = Some(Box::new(Leaf(other_page)));
+                Leaf(page)
+              }
+              else {
+                let mut new_subtree = PageTree::new();
+                let right_offset = page.length;
+                new_subtree.insert_page_at_offset(page, 0);
+                new_subtree.insert_page_at_offset(next_page, right_offset);
+                Tree(new_subtree)
+              }
+            } else { unreachable!(); };
+          });
+      }
     }
     self.update_caches();
     self.ensure_balanced();
@@ -210,6 +233,8 @@ impl PageTree {
     self.insert_page_at_offset(page, offset);
   }
 
+  // Inserting pages directly is useful for efficiently building a well balanced
+  // tree when reading a file.
   fn insert_page_at_offset(&mut self, page: Page, offset: usize) {
     assert!(offset <= self.length);
 
@@ -220,23 +245,24 @@ impl PageTree {
                             else       { (&mut self.right, &mut self.left) };
 
       match *branch {
-        Nil                => *branch = Leaf(page),
-        Tree(ref mut tree) => tree.insert_page_at_offset(page, new_offset),
-        Leaf(_)            => {
+        None                         => *branch = Some(Box::new(Leaf(page))),
+        Some(box Tree(ref mut tree)) =>
+          tree.insert_page_at_offset(page, new_offset),
+        Some(box Leaf(_))            => {
           // this offset must be on a page boundary, no splitting of pages
           assert!(new_offset == 0 || new_offset == branch.length());
           // make a new subtree only if necessary
-          if other.is_nil() {
+          if other.is_none() {
             // put page in the other branch and swap it to where it wants to be
-            *other = Leaf(page);
+            *other = Some(Box::new(Leaf(page)));
             mem::swap(branch, other);
           }
           else {
-            let mut new_subtree = Box::new(PageTree::new());
+            let mut new_subtree = PageTree::new();
             mem::swap(branch, &mut new_subtree.left);
             new_subtree.update_caches();
             new_subtree.insert_page_at_offset(page, new_offset);
-            *branch = Tree(new_subtree);
+            *branch = Some(Box::new(Tree(new_subtree)));
           }
         }
       }
@@ -245,8 +271,8 @@ impl PageTree {
     self.update_caches();
     self.ensure_balanced();
 
-    // if left is nil, right is nil
-    assert!(!self.left.is_nil() || self.right.is_nil());
+    // if left is none, right is none
+    assert!(!self.left.is_none() || self.right.is_none());
   }
 
   // Will delete from the start offset to either the end offset, or if the range
@@ -260,32 +286,35 @@ impl PageTree {
       let (go_left, new_start) = self.decide_branch_by_offset(start);
       let new_end = end - (start - new_start);
       let branch = if go_left { &mut self.left } else { &mut self.right };
-      let (new_branch, deleted) = match mem::replace(branch, Nil) {
-        Nil            => panic!("Attempted deleting from Nil node"),
-        Tree(mut tree) => {
-          let deleted = tree.delete_range(new_start, new_end);
-          // if a leaf was removed from the tree, lift the tree's other child
-          let new_branch = if tree.left.is_nil() { tree.right }
-                           else if tree.right.is_nil() { tree.left }
-                           else { Tree(tree) };
-          (new_branch, deleted)
-        },
-        Leaf(mut page) => {
-          let deleted = page.delete_range(new_start, new_end);
-          (if page.length == 0 { Nil } else { Leaf(page) }, deleted)
-        },
-      };
-      mem::replace(branch, new_branch);
-      deleted
+      if let Some(mut boxed_node) = branch.take() {
+        // perform the deletion
+        let deleted = match boxed_node {
+          box Tree(ref mut tree) => tree.delete_range(new_start, new_end),
+          box Leaf(ref mut page) => page.delete_range(new_start, new_end),
+        };
+        // decide whether we need to shrink the tree by lifting a node up
+        let page_emptied = match boxed_node {
+          box Tree(ref tree) => tree.left.is_none() || tree.right.is_none(),
+          box Leaf(ref page) => page.length == 0,
+        };
+        // put node back, or lift other node up if a page got empty
+        *branch = if !page_emptied { Some(boxed_node) } else {
+          match boxed_node {
+            box Tree(tree) => { assert!(tree.right.is_none()); tree.left }
+            box Leaf(_)    => None,
+          }
+        };
+        deleted
+      } else { panic!("Attempted deleting from None node"); }
     };
-    if self.left.is_nil() { mem::swap(&mut self.left, &mut self.right); }
+    if self.left.is_none() { mem::swap(&mut self.left, &mut self.right); }
     self.update_caches();
     self.ensure_balanced();
     return deleted;
   }
 
   // There are two cases when the branches' heights can differ by too much:
-  // 1) One branch is Nil and the other is a Tree. Simply replace self with the
+  // 1) One branch is None and the other is a Tree. Simply replace self with the
   // tree branch.
   // 2) The higher branch has two tree nodes down its highest path. Further,
   // those two tree nodes along with self has in total four affected subtrees
@@ -302,30 +331,33 @@ impl PageTree {
     // assuming the tree was well balanced before some recent insert/removal
     assert!(height_diff <= 2);
     if height_diff == 2 && (left_height == 0 || right_height == 0) {
-      let branch = mem::replace(
-        if self.left.is_nil() { &mut self.right } else { &mut self.left }, Nil);
-      if let Tree(new_self) = branch { mem::replace(self, *new_self); }
-      else                           { unreachable!(); }
+      let branch = self.left.take().or_else(|| self.right.take());
+      if let Some(box Tree(new_self)) = branch { *self = new_self; }
+      else                                     { unreachable!(); }
     }
     else if height_diff == 2 {
 
       // keep placeholders for the affected subtrees (left to right)
-      let mut t0 = Nil;
-      let mut t1 = Nil;
-      let mut t2 = Nil;
-      let mut t3 = Nil;
+      let mut t0 = None;
+      let mut t1 = None;
+      let mut t2 = None;
+      let mut t3 = None;
+
+      // also keep the tree nodes around to avoid allocating new ones
+      let mut mid_tree = None;
+      let mut low_tree = None;
 
       // go down the higher branch and stash the affected trees
       let first_go_left = left_height > right_height;
       match if first_go_left { &mut self.left } else { &mut self.right } {
-        &mut Nil | &mut Leaf(_) => unreachable!(),
-        &mut Tree(ref mut mid)  => {
+        &mut None | &mut Some(box Leaf(_)) => unreachable!(),
+        &mut Some(box Tree(ref mut mid))   => {
           let left_height = mid.left.height();
           let right_height = mid.right.height();
           let then_go_left = left_height > right_height;
           match if then_go_left { &mut mid.left } else { &mut mid.right } {
-            &mut Nil | &mut Leaf(_) => unreachable!(),
-            &mut Tree(ref mut low)  => {
+            &mut None | &mut Some(box Leaf(_)) => unreachable!(),
+            &mut Some(box Tree(ref mut low))   => {
               // stash the branches of the lower subtree in appropriate order
               let (left, right) = match (first_go_left, then_go_left) {
                 (false, false) => (&mut t2, &mut t3),
@@ -337,36 +369,48 @@ impl PageTree {
               mem::swap(&mut low.right, right);
             }
           }
-          // stash the other branch of the middle subtree in appropriate order
-          let (branch, placeholder) = match (first_go_left, then_go_left) {
-            (false, false) => (&mut mid.left, &mut t1),
-            (false, true)  => (&mut mid.right, &mut t3),
-            (true,  false) => (&mut mid.left, &mut t0),
-            (true,  true)  => (&mut mid.right, &mut t2),
+          // stash the lower subtree as well as the middle subtree's other
+          // branch in the appropriate order
+          let placeholder = match (first_go_left, then_go_left) {
+            (false, false) => &mut t1,
+            (false, true)  => &mut t3,
+            (true,  false) => &mut t0,
+            (true,  true)  => &mut t2,
           };
+          let (branch, other) =
+            if then_go_left { (&mut mid.right, &mut mid.left) }
+            else            { (&mut mid.left, &mut mid.right) };
           mem::swap(branch, placeholder);
+          mem::swap(&mut low_tree, other);
         }
       }
+
       // stash the other branch of self in appropriate order
       if first_go_left { mem::swap(&mut self.right, &mut t3); }
       else             { mem::swap(&mut self.left, &mut t0); }
 
-      // assemble a new tree using the subtrees we stashed above
-      let mut balanced_tree = PageTree::new();
-      let mut left = PageTree::new();
-      let mut right = PageTree::new();
-      mem::swap(&mut left.left, &mut t0);
-      mem::swap(&mut left.right, &mut t1);
-      mem::swap(&mut right.left, &mut t2);
-      mem::swap(&mut right.right, &mut t3);
-      left.update_caches();
-      right.update_caches();
-      balanced_tree.left = Tree(Box::new(left));
-      balanced_tree.right = Tree(Box::new(right));
-      balanced_tree.update_caches();
+      // finally stash the middle tree as well
+      mem::swap(&mut mid_tree,
+        if first_go_left { &mut self.left } else { &mut self.right });
 
-      // finally replace self with the balanced tree
-      mem::swap(self, &mut balanced_tree);
+      // lift the two trees into self
+      mem::swap(&mut self.left, &mut mid_tree);
+      mem::swap(&mut self.right, &mut low_tree);
+
+      // place t0-t3 into the left and right tree in appropriate order
+      self.left.as_mut().or_else(|| unreachable!()).map(|boxed_tree_node|
+          if let box Tree(ref mut left) = *boxed_tree_node {
+            mem::swap(&mut left.left, &mut t0);
+            mem::swap(&mut left.right, &mut t1);
+            left.update_caches();
+          } else { unreachable!() });
+      self.right.as_mut().or_else(|| unreachable!()).map(|boxed_tree_node|
+          if let box Tree(ref mut right) = *boxed_tree_node {
+            mem::swap(&mut right.left, &mut t2);
+            mem::swap(&mut right.right, &mut t3);
+            right.update_caches();
+          } else { unreachable!() });
+      self.update_caches();
     }
   }
 
@@ -381,13 +425,14 @@ impl PageTree {
   fn find_page_by_offset(&self, offset: usize) -> Option<(&Page, usize)> {
     if offset >= self.length { return None; }
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
-    let res = match if go_left { &self.left } else { &self.right } {
-      &Nil            => None,
-      &Tree(ref tree) => tree.find_page_by_offset(new_offset),
-      &Leaf(ref page) => Some((page, 0)),
-    };
-    res.map(|(page, offset)|
-      (page, offset + if go_left { 0 } else { self.left.length() }))
+    let branch = if go_left { &self.left } else { &self.right };
+    branch.as_ref().and_then(|node|
+        match *node {
+          box Tree(ref tree) => tree.find_page_by_offset(new_offset),
+          box Leaf(ref page) => Some((page, 0)),
+        }).
+      map(|(page, offset)|
+        (page, offset + if go_left { 0 } else { self.left.length() }))
   }
 
   fn decide_branch_by_offset(&self, offset: usize) -> (bool, usize) {
@@ -922,10 +967,11 @@ mod test {
   balance_test!(balanced_insert_9001, 9001);
 
   fn is_balanced(tree: &super::PageTree) -> bool {
-    let branch_is_balanced = |branch: &super::PageTreeNode| {
-      match branch {
-        &super::PageTreeNode::Tree(ref tree) => is_balanced(&**tree),
-        _                                    => true,
+    use super::PageTreeLinkFuncs;
+    let branch_is_balanced = |branch: &super::PageTreeLink| {
+      match *branch {
+        Some(box super::PageTreeNode::Tree(ref tree)) => is_balanced(tree),
+        _                                             => true,
       }
     };
     let left_height = tree.left.height();
