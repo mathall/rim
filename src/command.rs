@@ -6,16 +6,21 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+extern crate futures;
+extern crate tokio_core;
+extern crate tokio_timer;
 extern crate vec_map;
 
 use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::path::PathBuf;
-use std::sync::mpsc::{channel, Receiver, SendError, Sender};
 use std::thread;
 use std::time::Duration;
 
 use self::vec_map::VecMap;
+
+use futures::{Future, Stream};
+use futures::sync::{mpsc, oneshot};
 
 use caret;
 use frame;
@@ -40,24 +45,16 @@ const TIMEOUT: u64 = 100;
  * arrival of the command before the command thread can proceed to process
  * further keys. This allows the client to for instance set a new mode to be
  * used for the keys ahead.
- * A key receiver must be set after that the thread has been setup to process
- * keys as desired for the first time.
  */
 pub struct CmdThread {
-  kill_tx: Sender<()>,
-  died_rx: Receiver<()>,
-  msg_tx: Sender<Msg>,
+  kill_tx: Option<oneshot::Sender<()>>,
+  died_rx: Option<oneshot::Receiver<()>>,
+  msg_tx: mpsc::UnboundedSender<Msg>,
 }
 
 impl CmdThread {
   pub fn set_mode(&self, mode: Mode, num: usize) -> Result<(), ()> {
     self.msg_tx.send(Msg::SetMode(mode, num)).map_err(|_| ())
-  }
-
-  pub fn set_key_rx(&self, key_rx: Receiver<keymap::Key>)
-      -> Result<(), Receiver<keymap::Key>> {
-    self.msg_tx.send(Msg::SetKeyRx(key_rx)).map_err(|SendError(msg)|
-      if let Msg::SetKeyRx(rx) = msg { rx } else { unreachable!() })
   }
 
   pub fn ack_cmd(&self) -> Result<(), ()> {
@@ -67,8 +64,9 @@ impl CmdThread {
 
 impl Drop for CmdThread {
   fn drop(&mut self) {
-    self.kill_tx.send(()).ok().expect("Command thread died prematurely.");
-    self.died_rx.recv().ok().expect("Command thread died prematurely.");
+    self.kill_tx.take().expect("CmdThread already killed.").complete(());
+    self.died_rx.take().expect("CmdThread already killed.").wait().expect(
+      "Input thread died prematurely.");
   }
 }
 
@@ -77,55 +75,33 @@ impl Drop for CmdThread {
  */
 enum Msg {
   SetMode(Mode, usize),
-  SetKeyRx(Receiver<keymap::Key>),
   AckCmd,
 }
 
 // start the command thread
-pub fn start(cmd_tx: Sender<Cmd>) -> CmdThread {
-  let (kill_tx, kill_rx) = channel();
-  let (died_tx, died_rx) = channel();
-  let (msg_tx, msg_rx) = channel();
-  thread::spawn(move || { cmd_thread(kill_rx, died_tx, msg_rx, cmd_tx); });
-  CmdThread { kill_tx: kill_tx, died_rx: died_rx, msg_tx: msg_tx }
+pub fn start(key_rx: mpsc::UnboundedReceiver<keymap::Key>,
+             cmd_tx: mpsc::UnboundedSender<Cmd>) -> CmdThread {
+  let (kill_tx, kill_rx) = oneshot::channel();
+  let (died_tx, died_rx) = oneshot::channel();
+  let (msg_tx, msg_rx) = mpsc::unbounded();
+  thread::spawn(move || cmd_thread(kill_rx, died_tx, msg_rx, key_rx, cmd_tx));
+  CmdThread { kill_tx: Some(kill_tx), died_rx: Some(died_rx), msg_tx: msg_tx }
 }
 
-fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
-              cmd_tx: Sender<Cmd>) {
-  // Set up a helper thread along with communication channels for handling
-  // timeout requests.
-  let (timeout_tx, timeout_rx) = channel();
-  let (oneshot_tx, oneshot_rx) = channel();
-  thread::spawn(move || {
-    let oneshot = |ms: u64| -> Receiver<()> {
-      let (tx, rx) = channel();
-      thread::spawn(move || {
-        thread::sleep(Duration::from_millis(ms));
-        tx.send(()).ok();
-      });
-      return rx;
-    };
-    let mut timeout = oneshot(TIMEOUT);
-    let mut response = None;
-    loop {
-      select!(
-        res = oneshot_rx.recv() => match res {
-          Ok(r) => { response = Some(r); },
-          _     => break,
-        },
-        res = timeout.recv()    => match res {
-          Ok(_) => { response.take().map(|r| timeout_tx.send(r).ok()); },
-          _     => break,
-        }
-      );
-      timeout = oneshot(TIMEOUT);
-    }
-  });
+/*
+ * Events to the command loop.
+ */
+enum CmdEvent {
+  Key(keymap::Key),
+  CmdMsg(Msg),
+  Timeout(usize),
+  Kill,
+}
 
-  // placeholder channel until a proper key receiver is set by a message, or if
-  // the key channel dies and we need to fall back on a placeholder again
-  let (mut _key_tx, mut key_rx) = channel();
-
+fn cmd_thread(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
+              msg_rx: mpsc::UnboundedReceiver<Msg>,
+              key_rx: mpsc::UnboundedReceiver<keymap::Key>,
+              cmd_tx: mpsc::UnboundedSender<Cmd>) {
   // assures that no commands are sent until the previous one has been
   // acknowledged
   let mut cmd_acknowledged = true;
@@ -140,42 +116,48 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
   // implies higher priority
   let mut modes = VecMap::new();
 
-  // keeps track of what we want to drain right now and, if we've already
-  // requested a timeout, the seq we want to drain when that timeout hits
-  let mut drain_seq = back_seq;
-  let mut requested_drain_seq = None;
+  // setup the command loop
+  let mut core = tokio_core::reactor::Core::new().unwrap();
 
-  loop {
-    let mut new_key_rx = None;
-    let mut drop_key_rx = false;
-    select!(
-      _ = kill_rx.recv()      => break,
-      seq = timeout_rx.recv() => {
-        drain_seq = seq.ok().expect("Timeout channel died.");
-      },
-      key = key_rx.recv()     => {
-        key.map_err(|_| drop_key_rx = true).map(|key| {
-          keys.push_back(key);
-          back_seq += 1;
-          requested_drain_seq = None; }).ok();
-      },
-      msg = msg_rx.recv()     => {
-        match msg.ok().expect("Message channel died.") {
+  // setup a channel through which timeouts may be requested
+  let timeout_core_handle = core.handle();
+  let (timeout_tx, timeout_rx) = mpsc::unbounded();
+  let request_timeout = |seq| {
+      let tx = timeout_tx.clone();
+      let timeout =
+        tokio_timer::wheel().tick_duration(Duration::from_millis(10)).build().
+        sleep(Duration::from_millis(TIMEOUT)).then(move |_| {
+            tx.send(seq).expect("Oneshot channel died.");
+            Ok(())
+          });
+      timeout_core_handle.spawn(timeout);
+    };
+
+  let killer = kill_rx.into_stream().map(|_| CmdEvent::Kill).map_err(|_| ());
+  let timeout = timeout_rx.map(CmdEvent::Timeout);
+  let msg_stream = msg_rx.map(CmdEvent::CmdMsg);
+  let key_stream = key_rx.map(CmdEvent::Key);
+
+  let cmd_loop = key_stream.select(msg_stream).select(timeout).select(killer).
+      for_each(|event| {
+    let mut drain = false;
+
+    match event {
+      CmdEvent::Key(key)     => { keys.push_back(key); back_seq += 1; }
+      CmdEvent::CmdMsg(msg)  =>
+        match msg {
           Msg::SetMode(mode, num) => { modes.insert(num, mode); }
-          Msg::SetKeyRx(rx)       => { new_key_rx = Some(rx); }
           Msg::AckCmd             => { cmd_acknowledged = true; }
-        }
-      }
-    );
-    if drop_key_rx { let (tx, rx) = channel(); _key_tx = tx; key_rx = rx; }
-    new_key_rx.map(|rx| key_rx = rx);
+        },
+      CmdEvent::Timeout(seq) => drain = seq == back_seq,
+      CmdEvent::Kill         => return Err(()),
+    }
 
     // work through the arrived keys
     while keys.len() > 0 {
-      assert!(back_seq >= front_seq && back_seq >= drain_seq);
-      // determine amount of keys to consider and whether to drain those keys
-      let drain = drain_seq > front_seq;
-      let num_keys = if drain { drain_seq } else { back_seq } - front_seq;
+      assert!(back_seq >= front_seq);
+      // determine amount of keys to consider
+      let num_keys = back_seq - front_seq;
       // match keys with modes in priority order
       let mut match_result = MatchResult::None;
       for (_, mode) in modes.iter().rev() {
@@ -195,25 +177,26 @@ fn cmd_thread(kill_rx: Receiver<()>, died_tx: Sender<()>, msg_rx: Receiver<Msg>,
       match match_result {
         MatchResult::None               => { keys.pop_front(); front_seq += 1; }
         MatchResult::Partial(num)       => {
-          let new_seq = front_seq + num;
-          if requested_drain_seq.map(|seq| new_seq > seq).unwrap_or(true) {
-            oneshot_tx.send(new_seq).ok().expect("Oneshot channel died.");
-            requested_drain_seq = Some(new_seq);
-          }
+          assert_eq!(front_seq + num, back_seq);
+          request_timeout(back_seq);
           break;
         }
         MatchResult::Complete(cmd, num) => {
           if !cmd_acknowledged { break; } else {
             for _ in 0..num { keys.pop_front(); front_seq += 1; }
-            cmd_tx.send(cmd).ok().expect("Command channel died.");
+            cmd_tx.send(cmd).expect("Command channel died.");
             cmd_acknowledged = false;
           }
         }
       }
     }
-  }
 
-  died_tx.send(()).unwrap();
+    Ok(())
+  });
+
+  core.run(cmd_loop).ok();
+
+  died_tx.complete(());
 }
 
 /*
@@ -378,6 +361,12 @@ pub enum WinCmd {
 mod test {
   use std::time::Duration;
 
+  use super::tokio_timer;
+
+  use futures;
+  use futures::sync::mpsc;
+  use futures::{Future, Stream};
+
   use frame;
   use keymap;
   use keymap::Key;
@@ -389,17 +378,19 @@ mod test {
                     callback: C)
       where S: Fn(&super::CmdThread) -> (),
             C: Fn(super::Cmd, &super::CmdThread) -> () {
-    use std::sync::mpsc::channel;
     use std::thread;
 
     // set up communication channels
-    let (key_tx, key_rx) = channel();
-    let (cmd_tx, cmd_rx) = channel();
+    let (key_tx, key_rx) = mpsc::unbounded();
+    let (cmd_tx, cmd_rx) = mpsc::unbounded();
 
     // start and setup command thread
-    let cmd_thread = super::start(cmd_tx);
+    let cmd_thread = super::start(key_rx, cmd_tx);
     setup(&cmd_thread);
-    cmd_thread.set_key_rx(key_rx).ok().unwrap();
+
+    // unfortunately tokio seems to miss keys if we start blastimg them off
+    // right after setting up the command thread
+    thread::sleep(Duration::from_millis(1));
 
     // send off key events on separate thread
     thread::spawn(move || {
@@ -409,21 +400,20 @@ mod test {
       }
     });
 
-    // receive commands and match with expectations
-    let (timeout_tx, timeout_rx) = channel();
-    thread::spawn(move || {
-      thread::sleep(Duration::from_millis(1000)); timeout_tx.send(()).ok();
-    });
-    for output in outputs.iter() {
-      select!(
-        cmd = cmd_rx.recv()   => {
-          assert_eq!(cmd.clone().unwrap(), *output);
-          callback(cmd.unwrap(), &cmd_thread);
-          cmd_thread.ack_cmd().unwrap();
-        },
-        _ = timeout_rx.recv() => { panic!("Timeout waiting for command."); }
-      );
-    }
+    let timeout =
+      tokio_timer::wheel().tick_duration(Duration::from_millis(10)).build().
+      sleep(Duration::from_millis(1000)).then(|_| Err(()));
+
+    // match up received commands with the expected output
+    let expected_output = futures::stream::iter(outputs.iter().map(Ok));
+    let check = cmd_rx.zip(expected_output).for_each(|(cmd, output)| {
+        assert_eq!(cmd, *output);
+        callback(cmd, &cmd_thread);
+        cmd_thread.ack_cmd().unwrap();
+        Ok(())
+      });
+
+    check.select(timeout).wait().ok().expect("Timeout waiting for command.");
   }
 
   fn mode_0() -> super::Mode {

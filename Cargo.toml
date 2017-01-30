@@ -13,10 +13,13 @@ git = "git://github.com/mathall/termkey-rs.git"
 [dependencies]
 bitflags = "*"
 docopt = "*"
+futures = "*"
 libc = "*"
 rand = "*"
 rustc-serialize = "*"
 term = "*"
+tokio-core = "*"
+tokio-timer = "*"
 unicode-width = "*"
 uuid = { version = "*", features = ["v4"] }
 vec_map = "*"

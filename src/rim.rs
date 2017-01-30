@@ -7,22 +7,25 @@
  */
 
 #![feature(box_patterns)]
-#![feature(mpsc_select)]
 #![feature(slice_patterns)]
 
 #[macro_use]
 extern crate bitflags;
 extern crate docopt;
+extern crate futures;
 extern crate rustc_serialize;
+extern crate tokio_core;
+extern crate tokio_timer;
 
 #[cfg(not(test))]
 use std::collections::HashMap;
 #[cfg(not(test))]
 use std::path::{Path, PathBuf};
 #[cfg(not(test))]
-use std::thread;
-#[cfg(not(test))]
 use std::time::Duration;
+
+#[cfg(not(test))]
+use futures::Stream;
 
 mod buffer;
 mod caret;
@@ -593,6 +596,16 @@ struct Args {
   flag_version: bool,
 }
 
+/*
+ * Events to the main loop.
+ */
+#[cfg(not(test))]
+#[derive(Clone)]
+enum RimEvent {
+  HandleCmd(command::Cmd),
+  Draw,
+}
+
 #[cfg(not(test))]
 fn main() {
   let args: Args = docopt::Docopt::new(USAGE).and_then(|d| d.decode()).
@@ -603,34 +616,36 @@ fn main() {
   }
   let mut screen = screen::Screen::setup().unwrap();
 
-  let (key_tx, key_rx) = std::sync::mpsc::channel();
+  let (key_tx, key_rx) = futures::sync::mpsc::unbounded();
   let _term_input = input::start(key_tx);
 
-  let (cmd_tx, cmd_rx) = std::sync::mpsc::channel();
+  let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
   cmd_tx.send(command::Cmd::ResetLayout).unwrap();
   let filename = args.arg_file.unwrap_or("src/rim.rs".to_string());
   cmd_tx.send(command::Cmd::WinCmd(command::WinCmd::OpenBuffer(
     PathBuf::from(&filename)))).unwrap();
-  let cmd_thread = command::start(cmd_tx);
+  let cmd_thread = command::start(key_rx, cmd_tx);
 
   let mut rim = Rim::new(cmd_thread);
 
-  rim.cmd_thread.set_key_rx(key_rx).ok().expect("Command thread died.");
+  // setup the main loop
+  let mut core = tokio_core::reactor::Core::new().expect(
+    "Couln't create a reactor core for the main loop.");
 
   // attempt to redraw at a regular interval
-  let (draw_pulse_tx, draw_pulse_rx) = std::sync::mpsc::channel();
-  thread::spawn(move || {
-    while let Ok(_) = draw_pulse_tx.send(()) { thread::sleep(Duration::from_millis(33)); }
-  });
+  let draw_pulse =
+    tokio_timer::wheel().tick_duration(Duration::from_millis(10)).build().
+    interval(Duration::from_millis(33)).map(|_| RimEvent::Draw).map_err(|_| ());
 
-  loop {
-    select!(
-      cmd = cmd_rx.recv()       => {
-        rim.handle_cmd(cmd.ok().expect("Command receiver died."));
-        if rim.quit { break } else { continue }
-      },
-      _ = draw_pulse_rx.recv()  => {}
-    );
+  let cmd_stream = cmd_rx.map(RimEvent::HandleCmd);
+
+  let rim_loop = cmd_stream.select(draw_pulse).for_each(|event| {
+    match event {
+      RimEvent::HandleCmd(cmd) => rim.handle_cmd(cmd),
+      RimEvent::Draw           => (),
+    }
+
+    if rim.quit { return Err(()); }
 
     // clear/redraw/update/invalidate everything if the screen size changed
     if screen.update_size() {
@@ -669,7 +684,11 @@ fn main() {
       expect("Couldn't find focused window.");
       screen.flush();
     }
-  }
+
+    Ok(())
+  });
+
+  core.run(rim_loop).ok();
 }
 
 #[cfg(not(test))]

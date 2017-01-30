@@ -6,14 +6,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
+extern crate futures;
 extern crate libc;
 extern crate termkey;
+extern crate tokio_core;
 
-use std::sync::mpsc::{channel, Receiver, Sender, TryRecvError};
 use std::thread;
 
 use self::termkey::{TermKeyEvent, TermKeyResult};
 use self::termkey::c::TermKeySym;
+
+use futures::{Future, Stream};
+use futures::sync::mpsc;
+use futures::sync::oneshot;
 
 use keymap;
 
@@ -26,29 +31,31 @@ const STDIN_FILENO: libc::c_int = 0;
  * TermInput is dropped, the terminal input loop will finish.
  */
 pub struct TermInput {
-  kill_tx: Sender<()>,
-  died_rx: Receiver<()>,
+  kill_tx: Option<oneshot::Sender<()>>,
+  died_rx: Option<oneshot::Receiver<()>>,
 }
 
 impl Drop for TermInput {
   fn drop(&mut self) {
-    self.kill_tx.send(()).unwrap();
-    self.died_rx.recv().unwrap();
+    self.kill_tx.take().expect("TermInput already killed.").complete(());
+    self.died_rx.take().expect("TermInput already killed.").wait().expect(
+      "Input thread died prematurely.");
   }
 }
 
 // start listening for terminal input on stdin
 #[cfg(not(test))]
-pub fn start(key_tx: Sender<keymap::Key>) -> TermInput {
+pub fn start(key_tx: mpsc::UnboundedSender<keymap::Key>) -> TermInput {
   start_on_fd(STDIN_FILENO, key_tx)
 }
 
 // start listening for terminal input on the specified file descriptor
-pub fn start_on_fd(fd: libc::c_int, key_tx: Sender<keymap::Key>) -> TermInput {
-  let (kill_tx, kill_rx) = channel();
-  let (died_tx, died_rx) = channel();
+pub fn start_on_fd(fd: libc::c_int, key_tx: mpsc::UnboundedSender<keymap::Key>)
+    -> TermInput {
+  let (kill_tx, kill_rx) = oneshot::channel();
+  let (died_tx, died_rx) = oneshot::channel();
   thread::spawn(move || { input_loop(kill_rx, died_tx, key_tx, fd); });
-  TermInput { kill_tx: kill_tx, died_rx: died_rx }
+  TermInput { kill_tx: Some(kill_tx), died_rx: Some(died_rx) }
 }
 
 /*
@@ -88,12 +95,31 @@ mod libc_poll {
   }
 }
 
-fn input_loop(kill_rx: Receiver<()>, died_tx: Sender<()>,
-              key_tx: Sender<keymap::Key>, fd: libc::c_int) {
-  let is_alive = || kill_rx.try_recv() == Err(TryRecvError::Empty);
+/*
+ * Events to the input loop.
+ */
+#[derive(Clone)]
+enum InputEvent {
+  Continue,
+  Break,
+}
+
+fn input_loop(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
+              key_tx: mpsc::UnboundedSender<keymap::Key>, fd: libc::c_int) {
   let mut tk = termkey::TermKey::new(fd, termkey::c::TERMKEY_FLAG_CTRLC);
 
-  while is_alive() {
+  let mut core = tokio_core::reactor::Core::new().expect(
+    "Couln't create a reactor core for the input loop.");
+
+  let inf = futures::stream::repeat::<_, ()>(InputEvent::Continue);
+  let killer = kill_rx.into_stream().map(|_| InputEvent::Break).map_err(|_| ());
+
+  let input_loop = inf.select(killer).for_each(|event| {
+    match event {
+      InputEvent::Continue => (),
+      InputEvent::Break    => return Err(()),
+    }
+
     // check for available input
     let poll_timeout_ms = 10;
     if libc_poll::poll_fd(fd, poll_timeout_ms) == libc_poll::PollResult::Ready {
@@ -122,11 +148,15 @@ fn input_loop(kill_rx: Receiver<()>, died_tx: Sender<()>,
               panic!("termkey::geykey_force failed with error code {}", err),
             _                         => unreachable!(),
           },
-      }.map(|key| key_tx.send(key));
+      }.map(|key| key_tx.send(key).expect("Key channel died."));
     }
-  }
 
-  died_tx.send(()).unwrap();
+    Ok(())
+  });
+
+  core.run(input_loop).ok();
+
+  died_tx.complete(());
 }
 
 fn translate_key(key: TermKeyEvent) -> Option<keymap::Key> {
@@ -227,11 +257,16 @@ fn translate_mods(mods: termkey::c::X_TermKey_KeyMod) -> keymap::KeyMod {
 
 #[cfg(test)]
 mod test {
+  extern crate tokio_timer;
+
   use super::libc;
   use std::mem;
-  use std::sync::mpsc::{channel, Sender};
   use std::thread;
   use std::time::Duration;
+
+  use futures;
+  use futures::{Future, Stream};
+  use futures::sync::{mpsc, oneshot};
 
   use keymap;
 
@@ -265,7 +300,7 @@ mod test {
       input_output_pairs.iter().map(|&(_, output)| output).collect();
 
     // set up communication channels
-    let (key_tx, key_rx) = channel();
+    let (key_tx, key_rx) = mpsc::unbounded();
     let (reader_fd, writer_fd) = unsafe {
       let mut fds = [0; 2];
       if libc::pipe(fds.as_mut_ptr()) != 0 { panic!("Failed to create pipe"); }
@@ -273,16 +308,21 @@ mod test {
     };
 
     // make sure we quit in an orderly fashion even at failure
-    let (close_writer_tx, close_writer_rx) = channel();
-    struct PipeKiller { close_writer_tx: Sender<()>, reader_fd: libc::c_int }
+    let (close_writer_tx, close_writer_rx) = oneshot::channel();
+    struct PipeKiller {
+      close_writer_tx: Option<oneshot::Sender<()>>,
+      reader_fd: libc::c_int,
+    }
     impl Drop for PipeKiller {
       fn drop(&mut self) {
         unsafe { libc::close(self.reader_fd); }
-        self.close_writer_tx.send(()).unwrap();
+        self.close_writer_tx.take().unwrap().complete(());
       }
     }
-    let _pipe_killer =
-      PipeKiller { close_writer_tx: close_writer_tx, reader_fd: reader_fd };
+    let _pipe_killer = PipeKiller {
+      close_writer_tx: Some(close_writer_tx),
+      reader_fd: reader_fd
+    };
 
     // start input listener
     let _term_input = super::start_on_fd(reader_fd, key_tx);
@@ -300,21 +340,21 @@ mod test {
         thread::sleep(Duration::from_millis(1));
       }
       // keep the pipe alive until we're finished with it
-      close_writer_rx.recv().unwrap();
+      close_writer_rx.wait().unwrap();
       unsafe { libc::close(writer_fd); }
     });
 
-    // receive key outputs and match with expectations
-    let (timeout_tx, timeout_rx) = channel();
-    thread::spawn(move || {
-      thread::sleep(Duration::from_millis(100));
-      timeout_tx.send(()).ok();
-    });
-    for output in outputs.iter() {
-      select!(
-        key = key_rx.recv()   => { assert_eq!(key.unwrap(), *output); },
-        _ = timeout_rx.recv() => { panic!("Timeout waiting for key event."); }
-      );
-    }
+    let timeout =
+      tokio_timer::wheel().tick_duration(Duration::from_millis(10)).build().
+      sleep(Duration::from_millis(100)).then(|_| Err(()));
+
+    // match up received keys with the expected output
+    let expected_output = futures::stream::iter(outputs.iter().map(Ok));
+    let check = key_rx.zip(expected_output).for_each(|(key, output)| {
+        assert_eq!(key, *output);
+        Ok(())
+      });
+
+    check.select(timeout).wait().ok().expect("Timeout waiting for key event.");
   }
 }
