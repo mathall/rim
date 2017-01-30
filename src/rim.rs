@@ -33,6 +33,7 @@ mod keymap;
 mod screen;
 mod view;
 
+#[cfg(not(test))]
 type BufferId = usize;
 
 #[cfg(not(test))]
