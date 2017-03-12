@@ -605,7 +605,7 @@ struct Args {
  */
 #[cfg(not(test))]
 #[derive(Clone)]
-enum RimEvent {
+enum Event {
   HandleCmd(Cmd),
   Draw,
 }
@@ -639,14 +639,14 @@ fn main() {
   // attempt to redraw at a regular interval
   let draw_pulse =
     tokio_timer::wheel().tick_duration(Duration::from_millis(10)).build().
-    interval(Duration::from_millis(33)).map(|_| RimEvent::Draw).map_err(|_| ());
+    interval(Duration::from_millis(33)).map(|_| Event::Draw).map_err(|_| ());
 
-  let cmd_stream = cmd_rx.map(RimEvent::HandleCmd);
+  let cmd_stream = cmd_rx.map(Event::HandleCmd);
 
   let rim_loop = cmd_stream.select(draw_pulse).for_each(|event| {
     match event {
-      RimEvent::HandleCmd(cmd) => rim.handle_cmd(cmd),
-      RimEvent::Draw           => (),
+      Event::HandleCmd(cmd) => rim.handle_cmd(cmd),
+      Event::Draw           => (),
     }
 
     if rim.quit { return Err(()); }

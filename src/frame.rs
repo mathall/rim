@@ -12,6 +12,7 @@ use std::cmp;
 use std::collections::{HashMap, vec_deque, VecDeque};
 use std::error;
 use std::fmt;
+use std::result;
 
 use screen;
 #[cfg(not(test))]
@@ -589,7 +590,7 @@ impl<'l> Iterator for LeafSectionIterator<'l> {
  * The various errors that may result from usage of the frame.
  */
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum FrameError {
+pub enum Error {
   NoSuchWindow,
   CantCloseLastWindow,
   NoNeighbouringWindow,
@@ -597,30 +598,30 @@ pub enum FrameError {
   NoSuchAdjacentWindow,
 }
 
-impl fmt::Display for FrameError {
+impl fmt::Display for Error {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{:?}", *self)
   }
 }
 
-impl error::Error for FrameError {
+impl error::Error for Error {
   fn description(&self) -> &str {
     match *self {
-      FrameError::NoSuchWindow         =>
+      Error::NoSuchWindow         =>
         "The provided WindowId does not refer to a window known by the frame.",
-      FrameError::CantCloseLastWindow  =>
+      Error::CantCloseLastWindow  =>
         "Attempted to close the last window in the frame.",
-      FrameError::NoNeighbouringWindow =>
+      Error::NoNeighbouringWindow =>
         "The window has no neighbours. (it's the last window)",
-      FrameError::NoSuchSequentWindow  =>
+      Error::NoSuchSequentWindow  =>
         "The window had no sequent window in the provided window order.",
-      FrameError::NoSuchAdjacentWindow =>
+      Error::NoSuchAdjacentWindow =>
         "The window had no adjacent window in the provided direction.",
     }
   }
 }
 
-pub type FrameResult<T> = Result<T, FrameError>;
+pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
@@ -661,8 +662,8 @@ impl FrameContext {
     self.window_to_section_path.insert(window.clone(), path);
   }
 
-  fn get_section_path(&self, window: &WindowId) -> FrameResult<&SectionPath> {
-    self.window_to_section_path.get(window).ok_or(FrameError::NoSuchWindow)
+  fn get_section_path(&self, window: &WindowId) -> Result<&SectionPath> {
+    self.window_to_section_path.get(window).ok_or(Error::NoSuchWindow)
   }
 
   fn get_window(&self, path: &SectionPath) -> WindowId {
@@ -700,7 +701,7 @@ impl Frame {
   }
 
   pub fn split_window(&mut self, ctx: &mut FrameContext, window: &WindowId,
-                      orientation: Orientation) -> FrameResult<WindowId> {
+                      orientation: Orientation) -> Result<WindowId> {
     ctx.get_section_path(window).
     map(|path| {
       // first make sure the window is large enough to fit the split
@@ -731,13 +732,13 @@ impl Frame {
   }
 
   pub fn close_window(&mut self, ctx: &mut FrameContext, window: &WindowId)
-      -> FrameResult<()> {
+      -> Result<()> {
     ctx.get_section_path(window).
     map(|path| path.clone()).
     and_then(|path| {
       let mut parent_section_path = path.clone();
       parent_section_path.pop().
-      ok_or(FrameError::CantCloseLastWindow).
+      ok_or(Error::CantCloseLastWindow).
       map(|side| {
         // get orientation we want to reset layout along after closing window
         let reset_orientation =
@@ -775,12 +776,12 @@ impl Frame {
   // the closest neighbour is the previous window.
   pub fn get_closest_neighbouring_window(&self, ctx: &FrameContext,
                                          window: &WindowId)
-      -> FrameResult<WindowId> {
+      -> Result<WindowId> {
     ctx.get_section_path(window).
     map(|path| path.clone()).
     and_then(|path|
       self.main_section.get_aligning_base(&mut path.iter()).
-      ok_or(FrameError::NoNeighbouringWindow).
+      ok_or(Error::NoNeighbouringWindow).
       and_then(|(aligning_base_path, _, _)|
         self.get_sequent_window(ctx, window, NextWindow, false).
         and_then(|next_window|
@@ -790,7 +791,7 @@ impl Frame {
           and_then(|next_path| {
             let next_is_neighbour = aligning_base_path.does_prefix(&next_path);
             if next_is_neighbour { Ok(ctx.get_window(&next_path)) }
-            else                 { Err(FrameError::NoNeighbouringWindow) }})).
+            else                 { Err(Error::NoNeighbouringWindow) }})).
         or_else(|_|
           self.get_sequent_window(ctx, window, PreviousWindow, false))))
   }
@@ -798,7 +799,7 @@ impl Frame {
   // Gets next or previous window in sequence determined by the section tree.
   pub fn get_sequent_window(&self, ctx: &FrameContext, window: &WindowId,
                             order: WindowOrder, wrap: bool)
-      -> FrameResult<WindowId> {
+      -> Result<WindowId> {
     let side = if order == NextWindow { Snd } else { Fst };
     ctx.get_section_path(window).
     and_then(|path|
@@ -806,25 +807,25 @@ impl Frame {
         next().or_else(||
           if wrap { LeafSectionIterator::new(&self.main_section, side).next() }
           else    { None }).
-        ok_or(FrameError::NoSuchSequentWindow)).
+        ok_or(Error::NoSuchSequentWindow)).
     map(|path| ctx.get_window(&path))
   }
 
   // Picks a point next to the window's rect depending on |direction| and
   // performs hit tests down the section tree to find the adjacent window.
   pub fn get_adjacent_window(&self, ctx: &FrameContext, window: &WindowId,
-                             direction: Direction) -> FrameResult<WindowId> {
+                             direction: Direction) -> Result<WindowId> {
     self.get_window_rect(ctx, window).
     and_then(|rect|
       adjacent_window_point(rect, direction).
       and_then(|point|
         self.main_section.get_section_at_point(screen::Cell(0, 0), point)).
-      ok_or(FrameError::NoSuchAdjacentWindow)).
+      ok_or(Error::NoSuchAdjacentWindow)).
     map(|path| ctx.get_window(&path))
   }
 
   pub fn get_window_rect(&self, ctx: &FrameContext, window: &WindowId)
-      -> FrameResult<screen::Rect> {
+      -> Result<screen::Rect> {
     ctx.get_section_path(window).map(|path| self.get_section_rect(path))
   }
 
@@ -838,7 +839,7 @@ impl Frame {
   // Returns the amount the resize was able to absorb.
   pub fn resize_window(&mut self, ctx: &FrameContext, window: &WindowId,
                        orientation: Orientation, amount: isize)
-      -> FrameResult<isize> {
+      -> Result<isize> {
     ctx.get_section_path(window).
     map(|path| {
       let clamped_amount = if amount > 0 { amount } else {
@@ -1140,7 +1141,7 @@ mod test {
           frame.close_window(&mut ctx, &windows[close_nr]).unwrap();
           check_frame_invariants(&frame, &ctx);
         }
-        assert_eq!(Err(FrameError::CantCloseLastWindow),
+        assert_eq!(Err(Error::CantCloseLastWindow),
           frame.close_window(&mut ctx, &windows[close_last]));
       }
     }
@@ -1455,7 +1456,7 @@ mod test {
   #[test]
   fn get_no_closest_neighbour() {
     let (frame, ctx, main_window) = Frame::new();
-    assert_eq!(Err(FrameError::NoNeighbouringWindow),
+    assert_eq!(Err(Error::NoNeighbouringWindow),
       frame.get_closest_neighbouring_window(&ctx, &main_window));
   }
 
@@ -1489,9 +1490,9 @@ mod test {
     let first_window = windows[sequence[0]].clone();
     let last_window = windows[sequence[sequence.len() - 1]].clone();
 
-    assert_eq!(Err(FrameError::NoSuchSequentWindow),
+    assert_eq!(Err(Error::NoSuchSequentWindow),
       frame.get_sequent_window(&ctx, &first_window, PreviousWindow, false));
-    assert_eq!(Err(FrameError::NoSuchSequentWindow),
+    assert_eq!(Err(Error::NoSuchSequentWindow),
       frame.get_sequent_window(&ctx, &last_window, NextWindow, false));
 
     let order = NextWindow;
@@ -1569,7 +1570,7 @@ mod test {
                           windows: &Vec<WindowId>,
                           adjacencies: &[(usize, Option<usize>, Option<usize>,
                                           Option<usize>, Option<usize>)]) {
-    let err = FrameError::NoSuchAdjacentWindow;
+    let err = Error::NoSuchAdjacentWindow;
     let expectation_as_frame_result = |opt: Option<usize>|
       opt.map(|adj| windows[adj].clone()).ok_or(err);
     for &(win, left, right, up, down) in adjacencies.iter() {

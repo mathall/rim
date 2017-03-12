@@ -15,6 +15,7 @@ use std::io::{Seek, Read, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::result;
 
 use self::PageTreeNode::*;
 
@@ -724,30 +725,30 @@ impl Iterator for PageStream {
  * The various errors that may result from usage of the buffer.
  */
 #[derive(Debug)]
-pub enum BufferError {
+pub enum Error {
   IoError(io::Error),
   NoPath,
   BadLocation,
 }
 
-impl fmt::Display for BufferError {
+impl fmt::Display for Error {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{:?}", *self)
   }
 }
 
-impl error::Error for BufferError {
+impl error::Error for Error {
   fn description(&self) -> &str {
     match *self {
-      BufferError::IoError(ref err) => error::Error::description(err),
-      BufferError::NoPath           => "The buffer had no path.",
-      BufferError::BadLocation      =>
+      Error::IoError(ref err) => error::Error::description(err),
+      Error::NoPath           => "The buffer had no path.",
+      Error::BadLocation      =>
         "The line/column or offset did not specify a valid location",
     }
   }
 }
 
-pub type BufferResult<T> = Result<T, BufferError>;
+pub type Result<T> = result::Result<T, Error>;
 
 /*
  * The buffer is used to open, modify and write files back to disk.
@@ -765,12 +766,12 @@ impl Buffer {
     return buffer;
   }
 
-  pub fn open(path: &Path) -> BufferResult<Buffer> {
+  pub fn open(path: &Path) -> Result<Buffer> {
     PageStream::new(path).
     and_then(PageTree::build).
     and_then(|tree| Ok(Buffer { path: Some(path.to_path_buf()), tree: tree })).
     map(|mut buffer| { buffer.ensure_ends_with_newline(); buffer }).
-    map_err(|io_err| BufferError::IoError(io_err))
+    map_err(|io_err| Error::IoError(io_err))
   }
 
   fn ensure_ends_with_newline(&mut self) {
@@ -783,31 +784,31 @@ impl Buffer {
     }
   }
 
-  pub fn write(&self) -> BufferResult<()> {
+  pub fn write(&self) -> Result<()> {
     self.path.as_ref().
-    map_or(Err(BufferError::NoPath), |path| self.write_to(path))
+    map_or(Err(Error::NoPath), |path| self.write_to(path))
   }
 
-  pub fn write_to(&self, path: &Path) -> BufferResult<()> {
+  pub fn write_to(&self, path: &Path) -> Result<()> {
     File::create(path).
     and_then(|mut file|
       self.tree.iter().
       map(|page| file.write_all(page.data.as_bytes())).
       fold(Ok(()),
         |ok, err| if ok.is_ok() && err.is_err() { err } else { ok })).
-    map_err(|io_err| BufferError::IoError(io_err))
+    map_err(|io_err| Error::IoError(io_err))
   }
 
   #[cfg(not(test))]
-  pub fn path(&self) -> BufferResult<&Path> {
-    self.path.as_ref().map(|path| path.as_path()).ok_or(BufferError::NoPath)
+  pub fn path(&self) -> Result<&Path> {
+    self.path.as_ref().map(|path| path.as_path()).ok_or(Error::NoPath)
   }
 
   pub fn insert_at_line_column(&mut self, string: String, line: usize,
-                               column: usize) -> BufferResult<()> {
+                               column: usize) -> Result<()> {
     self.tree.line_column_to_offset(line, column).
     map(|offset| self.insert_at_offset(string, offset)).
-    ok_or(BufferError::BadLocation)
+    ok_or(Error::BadLocation)
   }
 
   pub fn insert_at_offset(&mut self, string: String, mut offset: usize) {
@@ -824,7 +825,7 @@ impl Buffer {
   }
 
   pub fn delete_range(&mut self, start_line: usize, start_column: usize,
-                      end_line: usize, end_column: usize) -> BufferResult<()> {
+                      end_line: usize, end_column: usize) -> Result<()> {
     self.tree.line_column_to_offset(start_line, start_column).
     and_then(|start|
       self.tree.line_column_to_offset(end_line, end_column).
@@ -834,7 +835,7 @@ impl Buffer {
       if start < end { Some((start, end)) } else { None }).
     map(|(start, mut end)|
       while start < end { end -= self.tree.delete_range(start, end); } ).
-    ok_or(BufferError::BadLocation)
+    ok_or(Error::BadLocation)
   }
 
   pub fn get_char_by_line_column(&self, line: usize, column: usize)
@@ -869,7 +870,7 @@ mod test {
   // Also throws in a balance check on the resulting page tree, because why not.
   fn buffer_test<O, M: ?Sized>(test: &String, operation: O, make_buffer: Box<M>)
       where O: Fn(&mut Buffer) -> (),
-            M: Fn() -> BufferResult<Buffer> {
+            M: Fn() -> Result<Buffer> {
     use std::error::Error;
     use std::io::Read;
     let result_path_string = format!("tests/buffer/{}-result.txt", test);
@@ -908,7 +909,7 @@ mod test {
       #[test]
       fn $name() {
         let test = stringify!($name).to_string();
-        let buffer_maker: Box<Fn() -> BufferResult<Buffer>> =
+        let buffer_maker: Box<Fn() -> Result<Buffer>> =
           if $new_file { Box::new(|| Ok(Buffer::new())) }
           else { Box::new(|| {
             let test_path_string = format!("tests/buffer/{}.txt", &test);

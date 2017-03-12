@@ -101,7 +101,7 @@ mod libc_poll {
  * Events to the input loop.
  */
 #[derive(Clone)]
-enum InputEvent {
+enum Event {
   Continue,
   Break,
 }
@@ -113,13 +113,13 @@ fn input_loop(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
   let mut core = tokio_core::reactor::Core::new().expect(
     "Couln't create a reactor core for the input loop.");
 
-  let inf = futures::stream::repeat::<_, ()>(InputEvent::Continue);
-  let killer = kill_rx.into_stream().map(|_| InputEvent::Break).map_err(|_| ());
+  let inf = futures::stream::repeat::<_, ()>(Event::Continue);
+  let killer = kill_rx.into_stream().map(|_| Event::Break).map_err(|_| ());
 
   let input_loop = inf.select(killer).for_each(|event| {
     match event {
-      InputEvent::Continue => (),
-      InputEvent::Break    => return Err(()),
+      Event::Continue => (),
+      Event::Break    => return Err(()),
     }
 
     // check for available input

@@ -94,7 +94,7 @@ pub fn start(key_rx: mpsc::UnboundedReceiver<Key>,
 /*
  * Events to the command loop.
  */
-enum CmdEvent {
+enum Event {
   Key(Key),
   CmdMsg(Msg),
   Timeout(usize),
@@ -136,24 +136,24 @@ fn cmd_thread(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
       timeout_core_handle.spawn(timeout);
     };
 
-  let killer = kill_rx.into_stream().map(|_| CmdEvent::Kill).map_err(|_| ());
-  let timeout = timeout_rx.map(CmdEvent::Timeout);
-  let msg_stream = msg_rx.map(CmdEvent::CmdMsg);
-  let key_stream = key_rx.map(CmdEvent::Key);
+  let killer = kill_rx.into_stream().map(|_| Event::Kill).map_err(|_| ());
+  let timeout = timeout_rx.map(Event::Timeout);
+  let msg_stream = msg_rx.map(Event::CmdMsg);
+  let key_stream = key_rx.map(Event::Key);
 
   let cmd_loop = key_stream.select(msg_stream).select(timeout).select(killer).
       for_each(|event| {
     let mut drain = false;
 
     match event {
-      CmdEvent::Key(key)     => { keys.push_back(key); back_seq += 1; }
-      CmdEvent::CmdMsg(msg)  =>
+      Event::Key(key)     => { keys.push_back(key); back_seq += 1; }
+      Event::CmdMsg(msg)  =>
         match msg {
           Msg::SetMode(mode, num) => { modes.insert(num, mode); }
           Msg::AckCmd             => { cmd_acknowledged = true; }
         },
-      CmdEvent::Timeout(seq) => drain = seq == back_seq,
-      CmdEvent::Kill         => return Err(()),
+      Event::Timeout(seq) => drain = seq == back_seq,
+      Event::Kill         => return Err(()),
     }
 
     // work through the arrived keys
