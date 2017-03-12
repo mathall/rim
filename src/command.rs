@@ -17,14 +17,13 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
+use self::futures::{Future, Stream};
+use self::futures::sync::{mpsc, oneshot};
 use self::vec_map::VecMap;
-
-use futures::{Future, Stream};
-use futures::sync::{mpsc, oneshot};
 
 use caret;
 use frame;
-use keymap;
+use keymap::Key;
 
 #[cfg(not(test))]
 const TIMEOUT: u64 = 3000;
@@ -79,7 +78,7 @@ enum Msg {
 }
 
 // start the command thread
-pub fn start(key_rx: mpsc::UnboundedReceiver<keymap::Key>,
+pub fn start(key_rx: mpsc::UnboundedReceiver<Key>,
              cmd_tx: mpsc::UnboundedSender<Cmd>) -> CmdThread {
   let (kill_tx, kill_rx) = oneshot::channel();
   let (died_tx, died_rx) = oneshot::channel();
@@ -92,7 +91,7 @@ pub fn start(key_rx: mpsc::UnboundedReceiver<keymap::Key>,
  * Events to the command loop.
  */
 enum CmdEvent {
-  Key(keymap::Key),
+  Key(Key),
   CmdMsg(Msg),
   Timeout(usize),
   Kill,
@@ -100,7 +99,7 @@ enum CmdEvent {
 
 fn cmd_thread(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
               msg_rx: mpsc::UnboundedReceiver<Msg>,
-              key_rx: mpsc::UnboundedReceiver<keymap::Key>,
+              key_rx: mpsc::UnboundedReceiver<Key>,
               cmd_tx: mpsc::UnboundedSender<Cmd>) {
   // assures that no commands are sent until the previous one has been
   // acknowledged
@@ -207,12 +206,12 @@ fn cmd_thread(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
 #[derive(Clone)]
 pub struct Mode {
   pub keychain: Keychain,
-  pub fallback: fn(keymap::Key) -> Option<Cmd>
+  pub fallback: fn(Key) -> Option<Cmd>
 }
 
 impl Mode {
   pub fn new() -> Mode {
-    fn fallback(_: keymap::Key) -> Option<Cmd> { None }
+    fn fallback(_: Key) -> Option<Cmd> { None }
     Mode { keychain: Keychain::new(), fallback: fallback }
   }
 }
@@ -237,7 +236,7 @@ enum MatchResult {
  */
 #[derive(Clone)]
 pub enum Keychain {
-  Node(HashMap<keymap::Key, Keychain>, Option<Cmd>),
+  Node(HashMap<Key, Keychain>, Option<Cmd>),
   Cmd(Cmd),
 }
 
@@ -246,7 +245,7 @@ impl Keychain {
     Keychain::Node(HashMap::new(), None)
   }
 
-  pub fn bind(&mut self, keys: &[keymap::Key], new_cmd: Cmd) {
+  pub fn bind(&mut self, keys: &[Key], new_cmd: Cmd) {
     let new_self = match mem::replace(self, Keychain::new()) {
       Keychain::Node(mut map, opt_cmd) => {
         match keys {
@@ -276,7 +275,7 @@ impl Keychain {
   }
 
   fn match_keys<'l, It>(&self, keys: &mut It, force: bool) -> MatchResult
-      where It: Iterator<Item=&'l keymap::Key> {
+      where It: Iterator<Item=&'l Key> {
     let res_from_opt = |opt: Option<Cmd>|
       opt.map(|cmd| MatchResult::Complete(cmd, 0)).unwrap_or(MatchResult::None);
     match self {
@@ -359,33 +358,33 @@ pub enum WinCmd {
 
 #[cfg(test)]
 mod test {
+  extern crate futures;
+  extern crate tokio_timer;
+
+  use std::thread;
   use std::time::Duration;
 
-  use super::tokio_timer;
-
-  use futures;
-  use futures::sync::mpsc;
-  use futures::{Future, Stream};
+  use self::futures::sync::mpsc;
+  use self::futures::{Future, Stream};
 
   use frame;
-  use keymap;
-  use keymap::Key;
+  use keymap::{Key, MOD_NONE};
+
+  use super::*;
 
   // Sends keys on one thread and receives commands and compares with
   // expectations on another. Each vector of keys will be sent in one go, with a
   // sleep inbetween to trigger a timeout.
-  fn run_test<S, C>(inputs: Vec<Vec<Key>>, outputs: Vec<super::Cmd>, setup: S,
+  fn run_test<S, C>(inputs: Vec<Vec<Key>>, outputs: Vec<Cmd>, setup: S,
                     callback: C)
-      where S: Fn(&super::CmdThread) -> (),
-            C: Fn(super::Cmd, &super::CmdThread) -> () {
-    use std::thread;
-
+      where S: Fn(&CmdThread) -> (),
+            C: Fn(Cmd, &CmdThread) -> () {
     // set up communication channels
     let (key_tx, key_rx) = mpsc::unbounded();
     let (cmd_tx, cmd_rx) = mpsc::unbounded();
 
     // start and setup command thread
-    let cmd_thread = super::start(key_rx, cmd_tx);
+    let cmd_thread = start(key_rx, cmd_tx);
     setup(&cmd_thread);
 
     // unfortunately tokio seems to miss keys if we start blastimg them off
@@ -396,7 +395,7 @@ mod test {
     thread::spawn(move || {
       for keys in inputs.iter() {
         for key in keys.iter() { key_tx.send(*key).unwrap(); }
-        thread::sleep(Duration::from_millis(super::TIMEOUT + 10));
+        thread::sleep(Duration::from_millis(TIMEOUT + 10));
       }
     });
 
@@ -416,89 +415,89 @@ mod test {
     check.select(timeout).wait().ok().expect("Timeout waiting for command.");
   }
 
-  fn mode_0() -> super::Mode {
-    let mut mode = super::Mode::new();
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::Quit);
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::ResetLayout);
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::CloseWindow);
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE}],
-      super::Cmd::CloseWindow);
+  fn mode_0() -> Mode {
+    let mut mode = Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::Quit);
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::ResetLayout);
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'c', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::CloseWindow);
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'd', mods: MOD_NONE}],
+      Cmd::CloseWindow);
     return mode;
   }
 
-  fn mode_1() -> super::Mode {
-    let mut mode = super::Mode::new();
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::MoveFocus(frame::Direction::Left));
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::MoveFocus(frame::Direction::Right));
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::MoveFocus(frame::Direction::Up));
+  fn mode_1() -> Mode {
+    let mut mode = Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::MoveFocus(frame::Direction::Left));
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::MoveFocus(frame::Direction::Right));
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'c', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::MoveFocus(frame::Direction::Up));
     return mode;
   }
 
-  fn mode_2() -> super::Mode {
-    let mut mode = super::Mode::new();
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::Quit);
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::ResetLayout);
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
-      super::Cmd::CloseWindow);
+  fn mode_2() -> Mode {
+    let mut mode = Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::Quit);
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::ResetLayout);
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE}],
+      Cmd::CloseWindow);
     return mode;
   }
 
-  fn mode_3() -> super::Mode {
-    let mut mode = super::Mode::new();
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
-      super::Cmd::MoveFocus(frame::Direction::Right));
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
-      super::Cmd::MoveFocus(frame::Direction::Up));
+  fn mode_3() -> Mode {
+    let mut mode = Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE}],
+      Cmd::MoveFocus(frame::Direction::Right));
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'c', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE}],
+      Cmd::MoveFocus(frame::Direction::Up));
     return mode;
   }
 
-  fn mode_4() -> super::Mode {
-    let mut mode = super::Mode::new();
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
-      super::Cmd::Quit);
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
-      super::Cmd::ResetLayout);
-    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                         Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}],
-      super::Cmd::CloseWindow);
+  fn mode_4() -> Mode {
+    let mut mode = Mode::new();
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE}],
+      Cmd::Quit);
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE}],
+      Cmd::ResetLayout);
+    mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+                         Key::Unicode{codepoint: 'b', mods: MOD_NONE}],
+      Cmd::CloseWindow);
     return mode;
   }
 
@@ -506,33 +505,33 @@ mod test {
   fn single_mode() {
     let inputs = vec!(vec!(
       // Quit
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
       // Nothing
-      Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'y', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'x', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'y', mods: MOD_NONE},
       // ResetLayout
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
       // Nothing
-      Key::Unicode{codepoint: 'z', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'z', mods: MOD_NONE},
       // CloseWindow
-      Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'c', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
       // Nothing (partial CloseWindow)
-      Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'c', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
       // ResetLayout
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE}));
     let outputs = vec!(
-      super::Cmd::Quit,
-      super::Cmd::ResetLayout,
-      super::Cmd::CloseWindow,
-      super::Cmd::ResetLayout);
-    let setup = |cmd_thread: &super::CmdThread| {
+      Cmd::Quit,
+      Cmd::ResetLayout,
+      Cmd::CloseWindow,
+      Cmd::ResetLayout);
+    let setup = |cmd_thread: &CmdThread| {
       cmd_thread.set_mode(mode_0(), 0).unwrap(); };
-    let callback = |_: super::Cmd, _: &super::CmdThread| {};
+    let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
@@ -540,35 +539,35 @@ mod test {
   fn multiple_modes() {
     let inputs = vec!(vec!(
       // MoveFocus(Left)
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
       // Nothing
-      Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'x', mods: MOD_NONE},
       // MoveFocus(Left)
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
       // mistype cbabaa, get CloseWindow from mode0 (cba), MoveFocus(Right)
       // overriding from mode1 (ba), leaving c in the buffer
-      Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
+      Key::Unicode{codepoint: 'c', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'c', mods: MOD_NONE},
       // MoveFocus(Up) by properly typing cbabaa (c left from above)
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE}));
     let outputs = vec!(
-      super::Cmd::MoveFocus(frame::Direction::Left),
-      super::Cmd::MoveFocus(frame::Direction::Left),
-      super::Cmd::CloseWindow,
-      super::Cmd::MoveFocus(frame::Direction::Right),
-      super::Cmd::MoveFocus(frame::Direction::Up));
-    let setup = |cmd_thread: &super::CmdThread| {
+      Cmd::MoveFocus(frame::Direction::Left),
+      Cmd::MoveFocus(frame::Direction::Left),
+      Cmd::CloseWindow,
+      Cmd::MoveFocus(frame::Direction::Right),
+      Cmd::MoveFocus(frame::Direction::Up));
+    let setup = |cmd_thread: &CmdThread| {
       cmd_thread.set_mode(mode_0(), 0).unwrap();
       cmd_thread.set_mode(mode_1(), 1).unwrap(); };
-    let callback = |_: super::Cmd, _: &super::CmdThread| {};
+    let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
@@ -577,25 +576,25 @@ mod test {
     let inputs = vec!(
       vec!(
         // CloseWindow
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE},
         // Timeout: ResetLayout
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}),
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: MOD_NONE}),
       vec!(
         // Timeout: Nothing
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE}),
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE}),
       vec!(
         // Quit
-        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
+        Key::Unicode{codepoint: 'a', mods: MOD_NONE}));
     let outputs = vec!(
-      super::Cmd::CloseWindow,
-      super::Cmd::ResetLayout,
-      super::Cmd::Quit);
-    let setup = |cmd_thread: &super::CmdThread| {
+      Cmd::CloseWindow,
+      Cmd::ResetLayout,
+      Cmd::Quit);
+    let setup = |cmd_thread: &CmdThread| {
       cmd_thread.set_mode(mode_2(), 0).unwrap(); };
-    let callback = |_: super::Cmd, _: &super::CmdThread| {};
+    let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
@@ -604,35 +603,35 @@ mod test {
     let inputs = vec!(vec!(
       // Timeout: MoveFocus(Right) (bab override on mode1), throw c away,
       // Quit (mode0), ResetLayout (mode0)
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'c', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE}));
     let outputs = vec!(
-      super::Cmd::MoveFocus(frame::Direction::Right),
-      super::Cmd::Quit,
-      super::Cmd::ResetLayout);
-    let setup = |cmd_thread: &super::CmdThread| {
+      Cmd::MoveFocus(frame::Direction::Right),
+      Cmd::Quit,
+      Cmd::ResetLayout);
+    let setup = |cmd_thread: &CmdThread| {
       cmd_thread.set_mode(mode_2(), 0).unwrap();
       cmd_thread.set_mode(mode_3(), 1).unwrap(); };
-    let callback = |_: super::Cmd, _: &super::CmdThread| {};
+    let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
   #[test]
   fn change_mode() {
     let inputs = vec!(vec!(
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE}));
     let outputs = vec!(
-      super::Cmd::Quit,
-      super::Cmd::MoveFocus(frame::Direction::Left));
-    let setup = |cmd_thread: &super::CmdThread| {
+      Cmd::Quit,
+      Cmd::MoveFocus(frame::Direction::Left));
+    let setup = |cmd_thread: &CmdThread| {
       cmd_thread.set_mode(mode_0(), 0).unwrap(); };
-    let callback = |_: super::Cmd, cmd_thread: &super::CmdThread| {
+    let callback = |_: Cmd, cmd_thread: &CmdThread| {
       cmd_thread.set_mode(mode_1(), 0).unwrap(); };
     run_test(inputs, outputs, setup, callback);
   }
@@ -642,34 +641,34 @@ mod test {
     let inputs = vec!(
       vec!(
         // ResetLayout, normal match
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: MOD_NONE},
         // Fallback, plain miss
-        Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE},
+        Key::Unicode{codepoint: 'x', mods: MOD_NONE},
         // mistype dbad, triggering first miss then match on ba, then miss again
-        Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE}),
+        Key::Unicode{codepoint: 'd', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'x', mods: MOD_NONE}),
       vec!(
         // timeout on partial dbad, triggering first miss then match on ba
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-        Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}));
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+        Key::Unicode{codepoint: 'a', mods: MOD_NONE}));
     let outputs = vec!(
-      super::Cmd::ResetLayout,
-      super::Cmd::Quit,
-      super::Cmd::Quit,
-      super::Cmd::ResetLayout,
-      super::Cmd::Quit,
-      super::Cmd::Quit,
-      super::Cmd::ResetLayout);
-    let setup = |cmd_thread: &super::CmdThread| {
+      Cmd::ResetLayout,
+      Cmd::Quit,
+      Cmd::Quit,
+      Cmd::ResetLayout,
+      Cmd::Quit,
+      Cmd::Quit,
+      Cmd::ResetLayout);
+    let setup = |cmd_thread: &CmdThread| {
       let mut mode = mode_0();
-      fn fallback(_: Key) -> Option<super::Cmd> { Some(super::Cmd::Quit) }
+      fn fallback(_: Key) -> Option<Cmd> { Some(Cmd::Quit) }
       mode.fallback = fallback;
       cmd_thread.set_mode(mode, 0).unwrap(); };
-    let callback = |_: super::Cmd, _: &super::CmdThread| {};
+    let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
 
@@ -682,61 +681,61 @@ mod test {
       assert_eq!(mode.keychain.match_keys(&mut keys.iter(), true), forced); };
 
     // no matches
-    let keys = vec!(Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::None, super::MatchResult::None);
+    let keys = vec!(Key::Unicode{codepoint: 'a', mods: MOD_NONE});
+    match_test(keys, MatchResult::None, MatchResult::None);
     let keys = vec!(
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::None, super::MatchResult::None);
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE});
+    match_test(keys, MatchResult::None, MatchResult::None);
 
     // force a no match from a patial match
-    let keys = vec!(Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::Partial(1), super::MatchResult::None);
+    let keys = vec!(Key::Unicode{codepoint: 'b', mods: MOD_NONE});
+    match_test(keys, MatchResult::Partial(1), MatchResult::None);
 
     // force a shorter complete match from a prefix of a longer command, the
     // shorter complete match must be the longest available
     let keys = vec!(
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::Partial(2),
-      super::MatchResult::Complete(super::Cmd::Quit, 2));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE});
+    match_test(keys, MatchResult::Partial(2),
+      MatchResult::Complete(Cmd::Quit, 2));
     let keys = vec!(
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::Partial(3),
-      super::MatchResult::Complete(super::Cmd::ResetLayout, 3));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE});
+    match_test(keys, MatchResult::Partial(3),
+      MatchResult::Complete(Cmd::ResetLayout, 3));
     let keys = vec!(
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::Partial(4),
-      super::MatchResult::Complete(super::Cmd::ResetLayout, 3));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE});
+    match_test(keys, MatchResult::Partial(4),
+      MatchResult::Complete(Cmd::ResetLayout, 3));
 
     // mistype a longer command to trigger a complete match of a shorter command
     // that prefix the longer one, the shorter complete match must be the
     // longest available
     let keys = vec!(
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::Complete(super::Cmd::Quit, 2),
-      super::MatchResult::Complete(super::Cmd::Quit, 2));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'x', mods: MOD_NONE});
+    match_test(keys, MatchResult::Complete(Cmd::Quit, 2),
+      MatchResult::Complete(Cmd::Quit, 2));
     let keys = vec!(
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::Complete(super::Cmd::ResetLayout, 3),
-      super::MatchResult::Complete(super::Cmd::ResetLayout, 3));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'x', mods: MOD_NONE});
+    match_test(keys, MatchResult::Complete(Cmd::ResetLayout, 3),
+      MatchResult::Complete(Cmd::ResetLayout, 3));
     let keys = vec!(
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'b', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-      Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE});
-    match_test(keys, super::MatchResult::Complete(super::Cmd::ResetLayout, 3),
-      super::MatchResult::Complete(super::Cmd::ResetLayout, 3));
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'b', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'a', mods: MOD_NONE},
+      Key::Unicode{codepoint: 'x', mods: MOD_NONE});
+    match_test(keys, MatchResult::Complete(Cmd::ResetLayout, 3),
+      MatchResult::Complete(Cmd::ResetLayout, 3));
   }
 }

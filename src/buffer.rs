@@ -739,7 +739,7 @@ impl fmt::Display for BufferError {
 impl error::Error for BufferError {
   fn description(&self) -> &str {
     match *self {
-      BufferError::IoError(ref err) => ::std::error::Error::description(err),
+      BufferError::IoError(ref err) => error::Error::description(err),
       BufferError::NoPath           => "The buffer had no path.",
       BufferError::BadLocation      =>
         "The line/column or offset did not specify a valid location",
@@ -862,12 +862,14 @@ mod test {
   use std::fs::File;
   use std::path::Path;
 
+  use super::*;
+
   // Opens a buffer (new or loaded file), performs some operation on it,
   // dumps buffer content to disk, compares results to expectations.
   // Also throws in a balance check on the resulting page tree, because why not.
   fn buffer_test<O, M: ?Sized>(test: &String, operation: O, make_buffer: Box<M>)
-      where O: Fn(&mut super::Buffer) -> (),
-            M: Fn() -> super::BufferResult<super::Buffer> {
+      where O: Fn(&mut Buffer) -> (),
+            M: Fn() -> BufferResult<Buffer> {
     use std::error::Error;
     use std::io::Read;
     let result_path_string = format!("tests/buffer/{}-result.txt", test);
@@ -898,7 +900,7 @@ mod test {
 
   #[test]
   fn write_without_path() {
-    assert!(super::Buffer::new().write().is_err());
+    assert!(Buffer::new().write().is_err());
   }
 
   macro_rules! buffer_test {
@@ -906,12 +908,12 @@ mod test {
       #[test]
       fn $name() {
         let test = stringify!($name).to_string();
-        let buffer_maker: Box<Fn() -> super::BufferResult<super::Buffer>> =
-          if $new_file { Box::new(|| Ok(super::Buffer::new())) }
+        let buffer_maker: Box<Fn() -> BufferResult<Buffer>> =
+          if $new_file { Box::new(|| Ok(Buffer::new())) }
           else { Box::new(|| {
             let test_path_string = format!("tests/buffer/{}.txt", &test);
             let test_path = Path::new(&test_path_string);
-            return super::Buffer::open(&test_path);
+            return Buffer::open(&test_path);
           }) };
         buffer_test(&test, $operation, buffer_maker);
       }
@@ -927,9 +929,9 @@ mod test {
     ($name:ident, $fun:ident, $num_pages:expr) => (
       #[test]
       fn $name() {
-        let mut tree = super::PageTree::new();
+        let mut tree = PageTree::new();
         for _ in 0..$num_pages {
-          tree.$fun(super::Page::new("a".to_string()));
+          tree.$fun(Page::new("a".to_string()));
         }
         assert!(is_balanced(&tree));
       }
@@ -947,11 +949,11 @@ mod test {
     ($name:ident, $num_pages:expr) => (
       #[test]
       fn $name() {
-        let mut tree = super::PageTree::new();
+        let mut tree = PageTree::new();
         let denominator: usize = 4;
         let mut numerator: usize = 0;
         for i in 0..$num_pages {
-          let page = super::Page::new("abc".to_string());
+          let page = Page::new("abc".to_string());
           let fraction = (numerator as f32) / (denominator as f32);
           let offset = ((i as f32) * fraction) as usize * page.length;
           tree.insert_page_at_offset(page, offset);
@@ -966,12 +968,11 @@ mod test {
   balance_test!(balanced_insert_33, 33);
   balance_test!(balanced_insert_9001, 9001);
 
-  fn is_balanced(tree: &super::PageTree) -> bool {
-    use super::PageTreeLinkFuncs;
-    let branch_is_balanced = |branch: &super::PageTreeLink| {
+  fn is_balanced(tree: &PageTree) -> bool {
+    let branch_is_balanced = |branch: &PageTreeLink| {
       match *branch {
-        Some(box super::PageTreeNode::Tree(ref tree)) => is_balanced(tree),
-        _                                             => true,
+        Some(box PageTreeNode::Tree(ref tree)) => is_balanced(tree),
+        _                                      => true,
       }
     };
     let left_height = tree.left.height();
@@ -988,7 +989,7 @@ mod test {
   buffer_test!(page_split_utf8_insert, false, page_split_utf8_insert_operation);
   buffer_test!(long_string_insert, true, long_string_insert_operation);
 
-  fn existing_file_insert_operation(buffer: &mut super::Buffer) {
+  fn existing_file_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset("more".to_string(), 0);
     buffer.insert_at_offset(" than ".to_string(), 4);
     buffer.insert_at_offset(".".to_string(), 25);
@@ -996,20 +997,20 @@ mod test {
     buffer.insert_at_offset(" and then some".to_string(), buffer_end);
   }
 
-  fn new_file_insert_operation(buffer: &mut super::Buffer) {
+  fn new_file_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset("Here's a second line".to_string(), 1);
     buffer.insert_at_offset(" with a newline\n".to_string(), 21);
     buffer.insert_at_offset("First line go here".to_string(), 0);
     buffer.insert_at_offset(", and it even has a dot.".to_string(), 18);
   }
 
-  fn page_split_utf8_insert_operation(buffer: &mut super::Buffer) {
+  fn page_split_utf8_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset("boop".to_string(), 5);
     buffer.insert_at_offset("boop".to_string(), 22);
     buffer.insert_at_offset("boop".to_string(), 36);
   }
 
-  fn long_string_insert_operation(buffer: &mut super::Buffer) {
+  fn long_string_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset(
       include_str!("../tests/buffer/long_string_insert.txt").to_string(), 1);
   }
@@ -1026,7 +1027,7 @@ mod test {
     ];
 
     let test_path = Path::new("tests/buffer/line_column_offset.txt");
-    let buffer = super::Buffer::open(&test_path).unwrap();
+    let buffer = Buffer::open(&test_path).unwrap();
     for &((line, column), expected_offset) in tests.iter() {
       assert_eq!(buffer.tree.line_column_to_offset(line, column),
                  expected_offset);
@@ -1045,7 +1046,7 @@ mod test {
     ];
 
     let test_path = Path::new("tests/buffer/line_column_offset.txt");
-    let buffer = super::Buffer::open(&test_path).unwrap();
+    let buffer = Buffer::open(&test_path).unwrap();
     for &((line, column), expect_char) in tests.iter() {
       assert_eq!(buffer.get_char_by_line_column(line, column), expect_char);
     }
@@ -1066,7 +1067,7 @@ mod test {
   }
 
   fn line_length_test(path: &Path, expect: &[usize]) {
-    let buffer = super::Buffer::open(path).unwrap();
+    let buffer = Buffer::open(path).unwrap();
     assert_eq!(buffer.num_lines(), expect.len());
     for line in 0..buffer.num_lines() {
       assert_eq!(buffer.line_length(line).unwrap(), expect[line]);
@@ -1076,14 +1077,14 @@ mod test {
   #[test]
   fn line_iterator_yields_all_lines() {
     let path = Path::new("tests/buffer/lacking_newline.txt");
-    let buffer = super::Buffer::open(&path).unwrap();
+    let buffer = Buffer::open(&path).unwrap();
     assert_eq!(buffer.line_iter().count(), buffer.num_lines());
   }
 
   #[test]
   fn line_iterator_yields_correct_line_lengths() {
     let path = Path::new("tests/buffer/long_string_insert.txt");
-    let buffer = super::Buffer::open(&path).unwrap();
+    let buffer = Buffer::open(&path).unwrap();
     let mut line = 0;
     for chars in buffer.line_iter() {
       assert_eq!(buffer.line_length(line), Some(chars.count() - 1));
@@ -1095,7 +1096,7 @@ mod test {
   #[test]
   fn char_iterator_yields_all_chars() {
     let path = Path::new("tests/buffer/lacking_newline.txt");
-    let buffer = super::Buffer::open(&path).unwrap();
+    let buffer = Buffer::open(&path).unwrap();
     let mut offset = 0;
     for chars in buffer.line_iter() {
       for character in chars {
@@ -1112,30 +1113,30 @@ mod test {
   buffer_test!(delete_big_range, false, delete_big_range_op);
   buffer_test!(delete_utf8, false, delete_utf8_op);
 
-  fn delete_char_by_char_start_op(buffer: &mut super::Buffer) {
+  fn delete_char_by_char_start_op(buffer: &mut Buffer) {
     for _ in 0..100 { buffer.tree.delete_range(0, 1); }
   }
 
-  fn delete_char_by_char_mid_op(buffer: &mut super::Buffer) {
+  fn delete_char_by_char_mid_op(buffer: &mut Buffer) {
     for _ in 0..100 { buffer.tree.delete_range(68, 69); }
   }
 
-  fn delete_char_by_char_end_op(buffer: &mut super::Buffer) {
+  fn delete_char_by_char_end_op(buffer: &mut Buffer) {
     for i in 0..100 { buffer.tree.delete_range(255 - i, 256 - i); }
   }
 
-  fn delete_big_range_op(buffer: &mut super::Buffer) {
+  fn delete_big_range_op(buffer: &mut Buffer) {
     buffer.delete_range(0, 227, 6, 91).ok().unwrap();
   }
 
-  fn delete_utf8_op(buffer: &mut super::Buffer) {
+  fn delete_utf8_op(buffer: &mut Buffer) {
     buffer.delete_range(0, 18, 2, 144).ok().unwrap();
   }
 
   #[test]
   fn delete_with_bad_input() {
     let path = Path::new("tests/buffer/lacking_newline.txt");
-    let mut buffer = super::Buffer::open(&path).unwrap();
+    let mut buffer = Buffer::open(&path).unwrap();
     assert!(buffer.delete_range(0, 100, 1, 0).is_err());
     assert!(buffer.delete_range(0, 0, 4, 0).is_err());
     assert!(buffer.delete_range(2, 0, 0, 0).is_err());

@@ -12,9 +12,12 @@ use std::cmp;
 
 use self::unicode_width::UnicodeWidthChar as CharWidth;
 
-use buffer;
+use buffer::Buffer;
 use caret;
+use caret::Caret;
 use screen;
+#[cfg(not(test))]
+use screen::Screen;
 
 const MIN_VIEW_SIZE: u16 = 1;
 
@@ -47,8 +50,7 @@ impl View {
   }
 
   // assumes caret is in view
-  pub fn caret_position(&self, caret: caret::Caret, buffer: &buffer::Buffer)
-      -> screen::Cell {
+  pub fn caret_position(&self, caret: Caret, buffer: &Buffer) -> screen::Cell {
     let caret_row = (caret.line() - self.scroll_line) as u16;
     let caret_column = caret::buffer_to_screen_column(
       caret.line(), caret.column(), buffer) - self.scroll_column;
@@ -60,8 +62,7 @@ impl View {
     self.scroll_column = column;
   }
 
-  pub fn scroll_into_view(&mut self, caret: caret::Caret,
-                          buffer: &buffer::Buffer) {
+  pub fn scroll_into_view(&mut self, caret: Caret, buffer: &Buffer) {
     let (line, column) = (caret.line(), caret.column());
     let screen::Size(rows, cols) = self.size;
     let rows = rows as usize;
@@ -96,16 +97,15 @@ impl View {
   }
 
   #[cfg(not(test))]
-  pub fn draw(&self, buffer: &buffer::Buffer, caret: caret::Caret,
-              focused: bool, position: screen::Cell,
-              screen: &mut screen::Screen) {
+  pub fn draw(&self, buffer: &Buffer, caret: Caret, focused: bool,
+              position: screen::Cell, screen: &mut Screen) {
     // calculate caret screen position if focused
     let caret_cell =
       if focused { Some(position + self.caret_position(caret, buffer)) }
       else       { None };
 
     // helper to put a character on the screen
-    let put = |character, cell: screen::Cell, screen: &mut screen::Screen| {
+    let put = |character, cell: screen::Cell, screen: &mut Screen| {
       use screen::Color::*;
       let highlight = caret_cell.map(|c| c != cell).unwrap_or(false);
       let (fg, bg) = if highlight { (Black, White) } else { (White, Black) };
@@ -155,16 +155,19 @@ impl View {
 mod test {
   use std::path::Path;
 
-  use buffer;
+  use buffer::Buffer;
   use caret;
+  use caret::Caret;
   use screen;
+
+  use super::*;
 
   #[test]
   fn scroll_into_view_double_width() {
-    let mut caret = caret::Caret::new();
-    let buffer = buffer::Buffer::open(
+    let mut caret = Caret::new();
+    let buffer = Buffer::open(
       &Path::new("tests/view/scroll_into_view_double_width.txt")).unwrap();
-    let mut view = super::View::new();
+    let mut view = View::new();
     view.set_size(screen::Size(1, 15));
     assert_eq!(view.scroll_line(), 0); assert_eq!(view.scroll_column(), 0);
     caret.adjust(caret::Adjustment::Set(0, 12), &buffer);
@@ -183,10 +186,10 @@ mod test {
 
   #[test]
   fn caret_position() {
-    let mut caret = caret::Caret::new();
-    let buffer = buffer::Buffer::open(
+    let mut caret = Caret::new();
+    let buffer = Buffer::open(
       &Path::new("tests/view/caret_position.txt")).unwrap();
-    let mut view = super::View::new();
+    let mut view = View::new();
     view.set_scroll(1, 1);
     caret.adjust(caret::Adjustment::Set(1, 1), &buffer);
     assert_eq!(view.caret_position(caret, &buffer), screen::Cell(0, 1));
@@ -196,7 +199,7 @@ mod test {
 
   #[test]
   fn line_clamped_to_view() {
-    let mut view = super::View::new();
+    let mut view = View::new();
     view.set_size(screen::Size(5, 5));
     view.set_scroll(5, 5);
     assert_eq!(view.line_clamped_to_view(1), 5);
