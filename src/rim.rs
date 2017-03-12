@@ -149,9 +149,8 @@ impl Rim {
     let (frame, frame_ctx, first_win_id) = Frame::new();
     let mut windows = HashMap::new();
     let first_win = Window::new();
-    cmd_thread.set_mode(default_mode(), 0).ok().expect("Command thread died.");
-    cmd_thread.set_mode(first_win.normal_mode.clone(), 1).ok().expect(
-      "Command thread died.");
+    cmd_thread.set_mode(default_mode(), 0);
+    cmd_thread.set_mode(first_win.normal_mode.clone(), 1);
     windows.insert(first_win_id.clone(), first_win);
     Rim {
       frame: frame,
@@ -192,8 +191,7 @@ impl Rim {
   fn set_focus(&mut self, win_id: frame::WindowId) {
     assert!(self.windows.contains_key(&win_id));
     self.windows.get(&win_id).map(|win|
-      self.cmd_thread.set_mode(win.normal_mode.clone(), 1).ok().expect(
-        "Command thread died."));
+      self.cmd_thread.set_mode(win.normal_mode.clone(), 1));
     self.windows.get_mut(&self.focus).map(|win| win.needs_redraw = true);
     self.windows.remove(&win_id).map(|mut win| {
       win.needs_redraw = true;
@@ -294,7 +292,7 @@ impl Rim {
         expect("Couldn't find focused window.");
       }
     }
-    self.cmd_thread.ack_cmd().ok().expect("Command thread died.");
+    self.cmd_thread.ack_cmd();
   }
 
   fn handle_win_cmd(&mut self, cmd: WinCmd, win: &mut Window) {
@@ -452,8 +450,7 @@ impl Rim {
   }
 
   fn set_win_cmd_mode(&mut self, mode: &command::Mode) {
-    self.cmd_thread.set_mode(mode.clone(), 1).ok().
-    expect("Command thread died.");
+    self.cmd_thread.set_mode(mode.clone(), 1);
   }
 
   fn scroll_view(&mut self, amount: isize, win: &mut Window) {

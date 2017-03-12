@@ -52,12 +52,16 @@ pub struct CmdThread {
 }
 
 impl CmdThread {
-  pub fn set_mode(&self, mode: Mode, num: usize) -> Result<(), ()> {
-    self.msg_tx.send(Msg::SetMode(mode, num)).map_err(|_| ())
+  pub fn set_mode(&self, mode: Mode, num: usize) {
+    self.send(Msg::SetMode(mode, num));
   }
 
-  pub fn ack_cmd(&self) -> Result<(), ()> {
-    self.msg_tx.send(Msg::AckCmd).map_err(|_| ())
+  pub fn ack_cmd(&self) {
+    self.send(Msg::AckCmd);
+  }
+
+  fn send(&self, msg: Msg) {
+    self.msg_tx.send(msg).ok().expect("command thread died");
   }
 }
 
@@ -408,7 +412,7 @@ mod test {
     let check = cmd_rx.zip(expected_output).for_each(|(cmd, output)| {
         assert_eq!(cmd, *output);
         callback(cmd, &cmd_thread);
-        cmd_thread.ack_cmd().unwrap();
+        cmd_thread.ack_cmd();
         Ok(())
       });
 
@@ -530,7 +534,7 @@ mod test {
       Cmd::CloseWindow,
       Cmd::ResetLayout);
     let setup = |cmd_thread: &CmdThread| {
-      cmd_thread.set_mode(mode_0(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_0(), 0); };
     let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
@@ -565,8 +569,8 @@ mod test {
       Cmd::MoveFocus(frame::Direction::Right),
       Cmd::MoveFocus(frame::Direction::Up));
     let setup = |cmd_thread: &CmdThread| {
-      cmd_thread.set_mode(mode_0(), 0).unwrap();
-      cmd_thread.set_mode(mode_1(), 1).unwrap(); };
+      cmd_thread.set_mode(mode_0(), 0);
+      cmd_thread.set_mode(mode_1(), 1); };
     let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
@@ -593,7 +597,7 @@ mod test {
       Cmd::ResetLayout,
       Cmd::Quit);
     let setup = |cmd_thread: &CmdThread| {
-      cmd_thread.set_mode(mode_2(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_2(), 0); };
     let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
@@ -615,8 +619,8 @@ mod test {
       Cmd::Quit,
       Cmd::ResetLayout);
     let setup = |cmd_thread: &CmdThread| {
-      cmd_thread.set_mode(mode_2(), 0).unwrap();
-      cmd_thread.set_mode(mode_3(), 1).unwrap(); };
+      cmd_thread.set_mode(mode_2(), 0);
+      cmd_thread.set_mode(mode_3(), 1); };
     let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
@@ -630,9 +634,9 @@ mod test {
       Cmd::Quit,
       Cmd::MoveFocus(frame::Direction::Left));
     let setup = |cmd_thread: &CmdThread| {
-      cmd_thread.set_mode(mode_0(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_0(), 0); };
     let callback = |_: Cmd, cmd_thread: &CmdThread| {
-      cmd_thread.set_mode(mode_1(), 0).unwrap(); };
+      cmd_thread.set_mode(mode_1(), 0); };
     run_test(inputs, outputs, setup, callback);
   }
 
@@ -667,7 +671,7 @@ mod test {
       let mut mode = mode_0();
       fn fallback(_: Key) -> Option<Cmd> { Some(Cmd::Quit) }
       mode.fallback = fallback;
-      cmd_thread.set_mode(mode, 0).unwrap(); };
+      cmd_thread.set_mode(mode, 0); };
     let callback = |_: Cmd, _: &CmdThread| {};
     run_test(inputs, outputs, setup, callback);
   }
