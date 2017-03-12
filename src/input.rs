@@ -9,7 +9,6 @@
 extern crate futures;
 extern crate libc;
 extern crate termkey;
-extern crate tokio_core;
 
 use std::thread;
 
@@ -110,9 +109,6 @@ fn input_loop(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
               key_tx: mpsc::UnboundedSender<Key>, fd: libc::c_int) {
   let mut tk = termkey::TermKey::new(fd, termkey::c::TERMKEY_FLAG_CTRLC);
 
-  let mut core = tokio_core::reactor::Core::new().expect(
-    "Couln't create a reactor core for the input loop.");
-
   let inf = futures::stream::repeat::<_, ()>(Event::Continue);
   let killer = kill_rx.into_stream().map(|_| Event::Break).map_err(|_| ());
 
@@ -156,7 +152,7 @@ fn input_loop(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
     Ok(())
   });
 
-  core.run(input_loop).ok();
+  input_loop.wait().ok();
 
   died_tx.complete(());
 }

@@ -14,7 +14,6 @@ extern crate bitflags;
 extern crate docopt;
 extern crate futures;
 extern crate rustc_serialize;
-extern crate tokio_core;
 extern crate tokio_timer;
 
 mod buffer;
@@ -34,7 +33,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(not(test))]
-use futures::Stream;
+use futures::{Future, Stream};
 
 #[cfg(not(test))]
 use buffer::Buffer;
@@ -632,10 +631,6 @@ fn main() {
 
   let mut rim = Rim::new(cmd_thread);
 
-  // setup the main loop
-  let mut core = tokio_core::reactor::Core::new().expect(
-    "Couln't create a reactor core for the main loop.");
-
   // attempt to redraw at a regular interval
   let draw_pulse =
     tokio_timer::wheel().tick_duration(Duration::from_millis(10)).build().
@@ -692,7 +687,7 @@ fn main() {
     Ok(())
   });
 
-  core.run(rim_loop).ok();
+  rim_loop.wait().ok();
 }
 
 #[cfg(not(test))]
