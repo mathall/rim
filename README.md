@@ -8,7 +8,7 @@ Rim is in an early prototype stage. This means that you can load, edit and save 
 
 ## Try it out
 
-For now you will need a nightly build of the Rust compiler in order to build Rim. When that is set up, simply clone and `cargo run`.
+Simply clone and `cargo run`.
 
 Note: Some key bindings are for testing purposes only, and some may not work exactly as you would expect them to.
 
@@ -56,9 +56,3 @@ Misc / For testing until a proper command line is implemented
 - `:qa<Enter>` - Quit
 - `:q<Enter>` - Close window and quit if it's the last one
 - `:w<Enter>` - Write buffer to file
-
-## What's next?
-Lots! But first maybe the ability to search in a buffer, which would open up for a range of other features.. or perhaps that big scary one; scripting
-
-## Trouble shooting
-As stated above, Rim requires Rust nightly to build. This is because Rim is using unstable features of the Rust language and standard libraries. Although breaking changes seem far between these days, it may be that I haven't updated to the latest nightly if things are not compiling for you.
