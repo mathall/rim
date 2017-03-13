@@ -6,9 +6,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#![feature(box_patterns)]
-#![feature(slice_patterns)]
-
 #[macro_use]
 extern crate bitflags;
 extern crate docopt;

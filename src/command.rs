@@ -252,26 +252,26 @@ impl Keychain {
   pub fn bind(&mut self, keys: &[Key], new_cmd: Cmd) {
     let new_self = match mem::replace(self, Keychain::new()) {
       Keychain::Node(mut map, opt_cmd) => {
-        match keys {
-          &[]                =>
+        match keys.split_first() {
+          None =>
             if map.len() > 0 { Keychain::Node(map, Some(new_cmd)) }
             else             { Keychain::Cmd(new_cmd) },
-          &[key, ref keys..] => {
+          Some((key, ref keys)) => {
             let mut subchain = map.remove(&key).unwrap_or(Keychain::new());
             subchain.bind(keys, new_cmd);
-            map.insert(key, subchain);
+            map.insert(*key, subchain);
             Keychain::Node(map, opt_cmd)
           }
         }
       }
       Keychain::Cmd(old_cmd)           => {
-        match keys {
-          &[]  => Keychain::Cmd(new_cmd),
-          keys => {
-            let mut chain = Keychain::Node(HashMap::new(), Some(old_cmd));
-            chain.bind(keys, new_cmd);
-            chain
-          }
+        if keys.is_empty() {
+          Keychain::Cmd(new_cmd)
+        }
+        else {
+          let mut chain = Keychain::Node(HashMap::new(), Some(old_cmd));
+          chain.bind(keys, new_cmd);
+          chain
         }
       }
     };
