@@ -7,9 +7,6 @@ authors = [ "Mathias Hällman <rim@mths.se>" ]
 [[bin]]
 name = "rim"
 
-[dependencies.termkey-rs]
-git = "git://github.com/mathall/termkey-rs.git"
-
 [dependencies]
 bitflags = "*"
 docopt = "*"
@@ -18,6 +15,7 @@ libc = "*"
 rand = "*"
 rustc-serialize = "*"
 term = "*"
+termkey-rs = { git = "git://github.com/mathall/termkey-rs.git" }
 tokio-core = "*"
 tokio-timer = "*"
 unicode-width = "*"
