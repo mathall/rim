@@ -7,16 +7,15 @@
  */
 
 extern crate term;
-#[cfg(not(test))]
 extern crate unicode_width;
-
-#[cfg(not(test))]
-use self::unicode_width::UnicodeWidthChar as CharWidth;
 
 use std::cmp;
 #[cfg(not(test))]
 use std::iter;
 use std::ops::{Add, Sub};
+
+#[cfg(not(test))]
+use self::unicode_width::UnicodeWidthChar as CharWidth;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Size(pub u16, pub u16);
@@ -99,7 +98,7 @@ impl CellIterator {
 impl Iterator for CellIterator {
   type Item = Cell;
 
-  fn next(&mut self) -> Option<Cell> {
+  fn next(&mut self) -> Option<Self::Item> {
     let ret = self.next_cell;
     self.next_cell = self.next_cell.and_then(|cell|
       (cell + Cell(0, 1)).within(self.size).or(

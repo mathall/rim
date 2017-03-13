@@ -15,6 +15,7 @@ use std::io::{Seek, Read, Write};
 use std::mem;
 use std::path::{Path, PathBuf};
 use std::ptr;
+use std::result;
 
 use self::PageTreeNode::*;
 
@@ -39,22 +40,13 @@ const MAX_PAGE_SIZE: usize = (PAGE_SIZE as f64 * 1.5) as usize;
  * characters unless otherwise specified.
  */
 enum PageTreeNode {
-  Tree(Box<PageTree>),
+  Tree(PageTree),
   Leaf(Page),
-  Nil,
 }
 
 impl PageTreeNode {
-  fn is_nil(&self) -> bool {
-    match *self {
-      Nil => true,
-      _   => false,
-    }
-  }
-
   fn length(&self) -> usize {
     match *self {
-      Nil            => 0,
       Tree(ref tree) => tree.length,
       Leaf(ref page) => page.length,
     }
@@ -62,7 +54,6 @@ impl PageTreeNode {
 
   fn newlines(&self) -> usize {
     match *self {
-      Nil            => 0,
       Tree(ref tree) => tree.newlines,
       Leaf(ref page) => page.newline_offsets.len(),
     }
@@ -70,16 +61,39 @@ impl PageTreeNode {
 
   fn height(&self) -> usize {
     match *self {
-      Nil            => 0,
       Tree(ref tree) => tree.height,
       Leaf(_)        => 1
     }
   }
 }
 
+type PageTreeLink = Option<Box<PageTreeNode>>;
+
+// This trait is a convenience that allows us to query a PageTreeLink for
+// certain information whether there's a node there or not.
+trait PageTreeLinkFuncs {
+  fn length(&self) -> usize;
+  fn newlines(&self) -> usize;
+  fn height(&self) -> usize;
+}
+
+impl PageTreeLinkFuncs for PageTreeLink {
+  fn length(&self) -> usize {
+    self.as_ref().map(|node| node.length()).unwrap_or(0)
+  }
+
+  fn newlines(&self) -> usize {
+    self.as_ref().map(|node| node.newlines()).unwrap_or(0)
+  }
+
+  fn height(&self) -> usize {
+    self.as_ref().map(|node| node.height()).unwrap_or(0)
+  }
+}
+
 struct PageTree {
-  left: PageTreeNode,
-  right: PageTreeNode,
+  left: PageTreeLink,
+  right: PageTreeLink,
   length: usize,  // cached length of pages down the subtrees
   newlines: usize,  // cached numer of newlines in the pages down the subtrees
   height: usize,  // cached height of the tree
@@ -87,7 +101,7 @@ struct PageTree {
 
 impl PageTree {
   fn new() -> PageTree {
-    PageTree { left: Nil, right: Nil, length: 0, newlines: 0, height: 1 }
+    PageTree { left: None, right: None, length: 0, newlines: 0, height: 1 }
   }
 
   fn build(mut stream: PageStream) -> io::Result<PageTree> {
@@ -127,13 +141,15 @@ impl PageTree {
     let (go_left, new_line) = self.decide_branch_by_line(line);
     let (branch, other) = if go_left { (&self.left, &self.right) }
                           else       { (&self.right, &self.left) };
-    match branch {
-      &Nil            => if new_line == 0 { Some(0) } else { None },
-      &Tree(ref tree) => tree.offset_of_line_start(new_line),
-      &Leaf(ref page) =>
-        if new_line == 0 { Some(0) }
-        else { page.offset_of_newline(new_line - 1).map(|offset| offset + 1) }
-    }.map(|offset| offset + if go_left { 0 } else { other.length() })
+    branch.as_ref().and_then(|boxed_node|
+        match **boxed_node {
+          Tree(ref tree) => tree.offset_of_line_start(new_line),
+          Leaf(ref page) =>
+            if new_line == 0 { Some(0) }
+            else { page.offset_of_newline(new_line - 1).map(|ofs| ofs + 1) }
+        }).
+      or(if new_line == 0 { Some(0) } else { None }).
+      map(|offset| offset + if go_left { 0 } else { other.length() })
   }
 
   fn get_char_by_line_column(&self, line: usize, column: usize)
@@ -144,11 +160,12 @@ impl PageTree {
 
   fn get_char_by_offset(&self, offset: usize) -> Option<char> {
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
-    match if go_left { &self.left } else { &self.right } {
-      &Nil            => None,
-      &Tree(ref tree) => tree.get_char_by_offset(new_offset),
-      &Leaf(ref page) => page.data.chars().nth(new_offset),
-    }
+    let branch = if go_left { &self.left } else { &self.right };
+    branch.as_ref().and_then(|boxed_node|
+        match **boxed_node {
+          Tree(ref tree) => tree.get_char_by_offset(new_offset),
+          Leaf(ref page) => page.data.chars().nth(new_offset),
+        })
   }
 
   fn insert_string_at_offset(&mut self, string: String, offset: usize) {
@@ -161,40 +178,52 @@ impl PageTree {
       let (branch, other) = if go_left { (&mut self.left, &mut self.right) }
                             else       { (&mut self.right, &mut self.left) };
 
-      let new_branch = match mem::replace(branch, Nil) {
-        Nil            => Leaf(Page::new(string)),
-        Tree(mut tree) => {
-          tree.insert_string_at_offset(string, new_offset);
-          Tree(tree)
-        },
-        Leaf(mut page) => {
-          page.insert_string_at_offset(string, new_offset);
-          // split the page if it got too big
-          if page.data.as_bytes().len() > MAX_PAGE_SIZE {
-            let (page, next_page) = page.split();
-            assert!(page.data.len() <= MAX_PAGE_SIZE);
-            assert!(next_page.data.len() <= MAX_PAGE_SIZE);
-            // avoid splitting the leaf if there's place in the other branch
-            if other.is_nil() {
-              let (page, other_page) =
-                if go_left { (page, next_page) } else { (next_page, page) };
-              *other = Leaf(other_page);
-              Leaf(page)
-            }
-            else {
-              let mut new_subtree = PageTree::new();
-              let right_offset = page.length;
-              new_subtree.insert_page_at_offset(page, 0);
-              new_subtree.insert_page_at_offset(next_page, right_offset);
-              Tree(Box::new(new_subtree))
-            }
-          }
-          else {
-            Leaf(page)
-          }
+      // perform the insertion
+      match *branch {
+        None                     =>
+          *branch = Some(Box::new(Leaf(Page::new(string)))),
+        Some(ref mut boxed_node) => match **boxed_node {
+          Tree(ref mut tree) =>
+            tree.insert_string_at_offset(string, new_offset),
+          Leaf(ref mut page) =>
+            page.insert_string_at_offset(string, new_offset),
+        }
+      }
+
+      // decide whether to split a page
+      let split_page = match *branch {
+        None                 => false,
+        Some(ref boxed_node) => match **boxed_node {
+          Leaf(ref page) => page.data.as_bytes().len() > MAX_PAGE_SIZE,
+          _              => false,
         }
       };
-      mem::replace(branch, new_branch);
+
+      // split the page if it got too big
+      if split_page {
+        branch.as_mut().or_else(|| unreachable!()).map(|boxed_node| {
+            let node = mem::replace(&mut **boxed_node, Tree(PageTree::new()));
+            **boxed_node = if let Leaf(page) = node {
+              let (page, next_page) = page.split();
+              assert!(page.data.len() <= MAX_PAGE_SIZE);
+              assert!(next_page.data.len() <= MAX_PAGE_SIZE);
+              // avoid splitting the leaf if there's place in the other branch
+              if other.is_none() {
+                let (page, other_page) =
+                  if go_left { (page, next_page) } else { (next_page, page) };
+                *other = Some(Box::new(Leaf(other_page)));
+                Leaf(page)
+              }
+              else {
+                let mut new_subtree = PageTree::new();
+                let right_offset = page.length;
+                new_subtree.insert_page_at_offset(page, 0);
+                new_subtree.insert_page_at_offset(next_page, right_offset);
+                Tree(new_subtree)
+              }
+            } else { unreachable!(); };
+          });
+      }
     }
     self.update_caches();
     self.ensure_balanced();
@@ -210,6 +239,8 @@ impl PageTree {
     self.insert_page_at_offset(page, offset);
   }
 
+  // Inserting pages directly is useful for efficiently building a well balanced
+  // tree when reading a file.
   fn insert_page_at_offset(&mut self, page: Page, offset: usize) {
     assert!(offset <= self.length);
 
@@ -219,24 +250,44 @@ impl PageTree {
       let (branch, other) = if go_left { (&mut self.left, &mut self.right) }
                             else       { (&mut self.right, &mut self.left) };
 
-      match *branch {
-        Nil                => *branch = Leaf(page),
-        Tree(ref mut tree) => tree.insert_page_at_offset(page, new_offset),
-        Leaf(_)            => {
+      #[derive(PartialEq)]
+      enum InsertMode {
+        SetBranch,
+        UpdateTree,
+        SplitLeaf,
+      }
+
+      let insert_mode = branch.as_ref().map(|boxed_node|
+        match **boxed_node {
+          Tree(_) => InsertMode::UpdateTree,
+          Leaf(_) => InsertMode::SplitLeaf,
+        }).unwrap_or(InsertMode::SetBranch);
+
+      match insert_mode {
+        InsertMode::SetBranch  => *branch = Some(Box::new(Leaf(page))),
+        InsertMode::UpdateTree => {
+          branch.as_mut().map(|mut boxed_node|
+            match **boxed_node {
+              Tree(ref mut tree) =>
+                tree.insert_page_at_offset(page, new_offset),
+              Leaf(_)            => unreachable!(),
+            }).or_else(|| unreachable!());
+        }
+        InsertMode::SplitLeaf  => {
           // this offset must be on a page boundary, no splitting of pages
           assert!(new_offset == 0 || new_offset == branch.length());
           // make a new subtree only if necessary
-          if other.is_nil() {
+          if other.is_none() {
             // put page in the other branch and swap it to where it wants to be
-            *other = Leaf(page);
+            *other = Some(Box::new(Leaf(page)));
             mem::swap(branch, other);
           }
           else {
-            let mut new_subtree = Box::new(PageTree::new());
+            let mut new_subtree = PageTree::new();
             mem::swap(branch, &mut new_subtree.left);
             new_subtree.update_caches();
             new_subtree.insert_page_at_offset(page, new_offset);
-            *branch = Tree(new_subtree);
+            *branch = Some(Box::new(Tree(new_subtree)));
           }
         }
       }
@@ -245,8 +296,8 @@ impl PageTree {
     self.update_caches();
     self.ensure_balanced();
 
-    // if left is nil, right is nil
-    assert!(!self.left.is_nil() || self.right.is_nil());
+    // if left is none, right is none
+    assert!(!self.left.is_none() || self.right.is_none());
   }
 
   // Will delete from the start offset to either the end offset, or if the range
@@ -260,32 +311,35 @@ impl PageTree {
       let (go_left, new_start) = self.decide_branch_by_offset(start);
       let new_end = end - (start - new_start);
       let branch = if go_left { &mut self.left } else { &mut self.right };
-      let (new_branch, deleted) = match mem::replace(branch, Nil) {
-        Nil            => panic!("Attempted deleting from Nil node"),
-        Tree(mut tree) => {
-          let deleted = tree.delete_range(new_start, new_end);
-          // if a leaf was removed from the tree, lift the tree's other child
-          let new_branch = if tree.left.is_nil() { tree.right }
-                           else if tree.right.is_nil() { tree.left }
-                           else { Tree(tree) };
-          (new_branch, deleted)
-        },
-        Leaf(mut page) => {
-          let deleted = page.delete_range(new_start, new_end);
-          (if page.length == 0 { Nil } else { Leaf(page) }, deleted)
-        },
-      };
-      mem::replace(branch, new_branch);
-      deleted
+      if let Some(mut boxed_node) = branch.take() {
+        // perform the deletion
+        let deleted = match *boxed_node {
+          Tree(ref mut tree) => tree.delete_range(new_start, new_end),
+          Leaf(ref mut page) => page.delete_range(new_start, new_end),
+        };
+        // decide whether we need to shrink the tree by lifting a node up
+        let page_emptied = match *boxed_node {
+          Tree(ref tree) => tree.left.is_none() || tree.right.is_none(),
+          Leaf(ref page) => page.length == 0,
+        };
+        // put node back, or lift other node up if a page got empty
+        *branch = if !page_emptied { Some(boxed_node) } else {
+          match *boxed_node {
+            Tree(tree) => { assert!(tree.right.is_none()); tree.left }
+            Leaf(_)    => None,
+          }
+        };
+        deleted
+      } else { panic!("Attempted deleting from None node"); }
     };
-    if self.left.is_nil() { mem::swap(&mut self.left, &mut self.right); }
+    if self.left.is_none() { mem::swap(&mut self.left, &mut self.right); }
     self.update_caches();
     self.ensure_balanced();
     return deleted;
   }
 
   // There are two cases when the branches' heights can differ by too much:
-  // 1) One branch is Nil and the other is a Tree. Simply replace self with the
+  // 1) One branch is None and the other is a Tree. Simply replace self with the
   // tree branch.
   // 2) The higher branch has two tree nodes down its highest path. Further,
   // those two tree nodes along with self has in total four affected subtrees
@@ -302,71 +356,99 @@ impl PageTree {
     // assuming the tree was well balanced before some recent insert/removal
     assert!(height_diff <= 2);
     if height_diff == 2 && (left_height == 0 || right_height == 0) {
-      let branch = mem::replace(
-        if self.left.is_nil() { &mut self.right } else { &mut self.left }, Nil);
-      if let Tree(new_self) = branch { mem::replace(self, *new_self); }
-      else                           { unreachable!(); }
+      let mut branch = self.left.take().or_else(|| self.right.take());
+      branch.take().map(|boxed_node| match *boxed_node {
+          Tree(new_self) => *self = new_self,
+          _              => unreachable!(),
+        }).or_else(|| unreachable!());
     }
     else if height_diff == 2 {
 
       // keep placeholders for the affected subtrees (left to right)
-      let mut t0 = Nil;
-      let mut t1 = Nil;
-      let mut t2 = Nil;
-      let mut t3 = Nil;
+      let mut t0 = None;
+      let mut t1 = None;
+      let mut t2 = None;
+      let mut t3 = None;
+
+      // also keep the tree nodes around to avoid allocating new ones
+      let mut mid_tree = None;
+      let mut low_tree = None;
 
       // go down the higher branch and stash the affected trees
       let first_go_left = left_height > right_height;
       match if first_go_left { &mut self.left } else { &mut self.right } {
-        &mut Nil | &mut Leaf(_) => unreachable!(),
-        &mut Tree(ref mut mid)  => {
-          let left_height = mid.left.height();
-          let right_height = mid.right.height();
-          let then_go_left = left_height > right_height;
-          match if then_go_left { &mut mid.left } else { &mut mid.right } {
-            &mut Nil | &mut Leaf(_) => unreachable!(),
-            &mut Tree(ref mut low)  => {
-              // stash the branches of the lower subtree in appropriate order
-              let (left, right) = match (first_go_left, then_go_left) {
-                (false, false) => (&mut t2, &mut t3),
-                (false, true)  => (&mut t1, &mut t2),
-                (true,  false) => (&mut t1, &mut t2),
-                (true,  true)  => (&mut t0, &mut t1),
+        &mut None                     => unreachable!(),
+        &mut Some(ref mut boxed_node) => {
+          match **boxed_node {
+            Leaf(_)           => unreachable!(),
+            Tree(ref mut mid) => {
+              let left_height = mid.left.height();
+              let right_height = mid.right.height();
+              let then_go_left = left_height > right_height;
+              match if then_go_left { &mut mid.left } else { &mut mid.right } {
+                &mut None                     => unreachable!(),
+                &mut Some(ref mut boxed_node) => {
+                  match **boxed_node {
+                    Leaf(_)           => unreachable!(),
+                    Tree(ref mut low) => {
+                      // stash the branches of the lower subtree in appropriate
+                      // order
+                      let (left, right) = match (first_go_left, then_go_left) {
+                        (false, false) => (&mut t2, &mut t3),
+                        (false, true)  => (&mut t1, &mut t2),
+                        (true,  false) => (&mut t1, &mut t2),
+                        (true,  true)  => (&mut t0, &mut t1),
+                      };
+                      mem::swap(&mut low.left, left);
+                      mem::swap(&mut low.right, right);
+                    }
+                  }
+                }
+              }
+              // stash the lower subtree as well as the middle subtree's other
+              // branch in the appropriate order
+              let placeholder = match (first_go_left, then_go_left) {
+                (false, false) => &mut t1,
+                (false, true)  => &mut t3,
+                (true,  false) => &mut t0,
+                (true,  true)  => &mut t2,
               };
-              mem::swap(&mut low.left, left);
-              mem::swap(&mut low.right, right);
+              let (branch, other) =
+                if then_go_left { (&mut mid.right, &mut mid.left) }
+                else            { (&mut mid.left, &mut mid.right) };
+              mem::swap(branch, placeholder);
+              mem::swap(&mut low_tree, other);
             }
           }
-          // stash the other branch of the middle subtree in appropriate order
-          let (branch, placeholder) = match (first_go_left, then_go_left) {
-            (false, false) => (&mut mid.left, &mut t1),
-            (false, true)  => (&mut mid.right, &mut t3),
-            (true,  false) => (&mut mid.left, &mut t0),
-            (true,  true)  => (&mut mid.right, &mut t2),
-          };
-          mem::swap(branch, placeholder);
         }
       }
+
       // stash the other branch of self in appropriate order
       if first_go_left { mem::swap(&mut self.right, &mut t3); }
       else             { mem::swap(&mut self.left, &mut t0); }
 
-      // assemble a new tree using the subtrees we stashed above
-      let mut balanced_tree = PageTree::new();
-      let mut left = PageTree::new();
-      let mut right = PageTree::new();
-      mem::swap(&mut left.left, &mut t0);
-      mem::swap(&mut left.right, &mut t1);
-      mem::swap(&mut right.left, &mut t2);
-      mem::swap(&mut right.right, &mut t3);
-      left.update_caches();
-      right.update_caches();
-      balanced_tree.left = Tree(Box::new(left));
-      balanced_tree.right = Tree(Box::new(right));
-      balanced_tree.update_caches();
+      // finally stash the middle tree as well
+      mem::swap(&mut mid_tree,
+        if first_go_left { &mut self.left } else { &mut self.right });
 
-      // finally replace self with the balanced tree
-      mem::swap(self, &mut balanced_tree);
+      // lift the two trees into self
+      mem::swap(&mut self.left, &mut mid_tree);
+      mem::swap(&mut self.right, &mut low_tree);
+
+      // place t0-t3 into the left and right tree in appropriate order
+      self.left.as_mut().or_else(|| unreachable!()).map(|boxed_tree_node|
+          if let Tree(ref mut left) = **boxed_tree_node {
+            mem::swap(&mut left.left, &mut t0);
+            mem::swap(&mut left.right, &mut t1);
+            left.update_caches();
+          } else { unreachable!() });
+      self.right.as_mut().or_else(|| unreachable!()).map(|boxed_tree_node|
+          if let Tree(ref mut right) = **boxed_tree_node {
+            mem::swap(&mut right.left, &mut t2);
+            mem::swap(&mut right.right, &mut t3);
+            right.update_caches();
+          } else { unreachable!() });
+      self.update_caches();
     }
   }
 
@@ -378,17 +460,17 @@ impl PageTree {
 
   // Optionally returns the page containing a certain offset along with total
   // offset building up to the start of it.
-  fn find_page_by_offset<'l>(&'l self, offset: usize)
-      -> Option<(&'l Page, usize)> {
+  fn find_page_by_offset(&self, offset: usize) -> Option<(&Page, usize)> {
     if offset >= self.length { return None; }
     let (go_left, new_offset) = self.decide_branch_by_offset(offset);
-    let res = match if go_left { &self.left } else { &self.right } {
-      &Nil            => None,
-      &Tree(ref tree) => tree.find_page_by_offset(new_offset),
-      &Leaf(ref page) => Some((&*page, 0)),
-    };
-    res.map(|(page, offset)|
-      (page, offset + if go_left { 0 } else { self.left.length() }))
+    let branch = if go_left { &self.left } else { &self.right };
+    branch.as_ref().and_then(|node|
+        match **node {
+          Tree(ref tree) => tree.find_page_by_offset(new_offset),
+          Leaf(ref page) => Some((page, 0)),
+        }).
+      map(|(page, offset)|
+        (page, offset + if go_left { 0 } else { self.left.length() }))
   }
 
   fn decide_branch_by_offset(&self, offset: usize) -> (bool, usize) {
@@ -425,7 +507,7 @@ impl<'l> PageTreeIterator<'l> {
 impl<'l> Iterator for PageTreeIterator<'l> {
   type Item = &'l Page;
 
-  fn next(&mut self) -> Option<&'l Page> {
+  fn next(&mut self) -> Option<Self::Item> {
     self.tree.find_page_by_offset(self.next_offset).map(
       |(page, offset)| { self.next_offset = offset + page.length; page })
   }
@@ -459,7 +541,7 @@ impl<'l> CharIterator<'l> {
 impl<'l> Iterator for CharIterator<'l> {
   type Item = char;
 
-  fn next(&mut self) -> Option<char> {
+  fn next(&mut self) -> Option<Self::Item> {
     if self.counter == 0 { None } else {
       self.counter -= 1;
       self.chars.as_mut().and_then(|ref mut chars| chars.next()).or_else(|| {
@@ -492,7 +574,7 @@ impl<'l> LineIterator<'l> {
 impl<'l> Iterator for LineIterator<'l> {
   type Item = CharIterator<'l>;
 
-  fn next(&mut self) -> Option<CharIterator<'l>> {
+  fn next(&mut self) -> Option<Self::Item> {
     self.tree.line_start_and_end_offset(self.next_line).
     and_then(|(start, end)| if start != end { Some((start, end)) }
                             else            { None }).
@@ -608,7 +690,7 @@ impl StringChunkerator {
 impl Iterator for StringChunkerator {
   type Item = String;
 
-  fn next(&mut self) -> Option<String> {
+  fn next(&mut self) -> Option<Self::Item> {
     // cut out a chunk of |self.chunk_size| bytes and hope it's a valid string
     let mut chunk: Vec<u8> =
       self.data.iter().take(self.chunk_size).map(|&b| b).collect();
@@ -661,7 +743,7 @@ impl PageStream {
 impl Iterator for PageStream {
   type Item = Page;
 
-  fn next(&mut self) -> Option<Page> {
+  fn next(&mut self) -> Option<Self::Item> {
     use std::ops::DerefMut;
     use std::io::SeekFrom;
     let mut data = Box::new([0; PAGE_SIZE]);
@@ -680,30 +762,30 @@ impl Iterator for PageStream {
  * The various errors that may result from usage of the buffer.
  */
 #[derive(Debug)]
-pub enum BufferError {
+pub enum Error {
   IoError(io::Error),
   NoPath,
   BadLocation,
 }
 
-impl fmt::Display for BufferError {
+impl fmt::Display for Error {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{:?}", *self)
   }
 }
 
-impl error::Error for BufferError {
+impl error::Error for Error {
   fn description(&self) -> &str {
     match *self {
-      BufferError::IoError(ref err) => ::std::error::Error::description(err),
-      BufferError::NoPath           => "The buffer had no path.",
-      BufferError::BadLocation      =>
+      Error::IoError(ref err) => error::Error::description(err),
+      Error::NoPath           => "The buffer had no path.",
+      Error::BadLocation      =>
         "The line/column or offset did not specify a valid location",
     }
   }
 }
 
-pub type BufferResult<T> = Result<T, BufferError>;
+pub type Result<T> = result::Result<T, Error>;
 
 /*
  * The buffer is used to open, modify and write files back to disk.
@@ -721,12 +803,12 @@ impl Buffer {
     return buffer;
   }
 
-  pub fn open(path: &Path) -> BufferResult<Buffer> {
+  pub fn open(path: &Path) -> Result<Buffer> {
     PageStream::new(path).
     and_then(PageTree::build).
     and_then(|tree| Ok(Buffer { path: Some(path.to_path_buf()), tree: tree })).
     map(|mut buffer| { buffer.ensure_ends_with_newline(); buffer }).
-    map_err(|io_err| BufferError::IoError(io_err))
+    map_err(|io_err| Error::IoError(io_err))
   }
 
   fn ensure_ends_with_newline(&mut self) {
@@ -739,31 +821,31 @@ impl Buffer {
     }
   }
 
-  pub fn write(&self) -> BufferResult<()> {
+  pub fn write(&self) -> Result<()> {
     self.path.as_ref().
-    map_or(Err(BufferError::NoPath), |path| self.write_to(path))
+    map_or(Err(Error::NoPath), |path| self.write_to(path))
   }
 
-  pub fn write_to(&self, path: &Path) -> BufferResult<()> {
+  pub fn write_to(&self, path: &Path) -> Result<()> {
     File::create(path).
     and_then(|mut file|
       self.tree.iter().
       map(|page| file.write_all(page.data.as_bytes())).
       fold(Ok(()),
         |ok, err| if ok.is_ok() && err.is_err() { err } else { ok })).
-    map_err(|io_err| BufferError::IoError(io_err))
+    map_err(|io_err| Error::IoError(io_err))
   }
 
   #[cfg(not(test))]
-  pub fn path(&self) -> BufferResult<&Path> {
-    self.path.as_ref().map(|path| path.as_path()).ok_or(BufferError::NoPath)
+  pub fn path(&self) -> Result<&Path> {
+    self.path.as_ref().map(|path| path.as_path()).ok_or(Error::NoPath)
   }
 
   pub fn insert_at_line_column(&mut self, string: String, line: usize,
-                               column: usize) -> BufferResult<()> {
+                               column: usize) -> Result<()> {
     self.tree.line_column_to_offset(line, column).
     map(|offset| self.insert_at_offset(string, offset)).
-    ok_or(BufferError::BadLocation)
+    ok_or(Error::BadLocation)
   }
 
   pub fn insert_at_offset(&mut self, string: String, mut offset: usize) {
@@ -780,7 +862,7 @@ impl Buffer {
   }
 
   pub fn delete_range(&mut self, start_line: usize, start_column: usize,
-                      end_line: usize, end_column: usize) -> BufferResult<()> {
+                      end_line: usize, end_column: usize) -> Result<()> {
     self.tree.line_column_to_offset(start_line, start_column).
     and_then(|start|
       self.tree.line_column_to_offset(end_line, end_column).
@@ -790,7 +872,7 @@ impl Buffer {
       if start < end { Some((start, end)) } else { None }).
     map(|(start, mut end)|
       while start < end { end -= self.tree.delete_range(start, end); } ).
-    ok_or(BufferError::BadLocation)
+    ok_or(Error::BadLocation)
   }
 
   pub fn get_char_by_line_column(&self, line: usize, column: usize)
@@ -818,12 +900,14 @@ mod test {
   use std::fs::File;
   use std::path::Path;
 
+  use super::*;
+
   // Opens a buffer (new or loaded file), performs some operation on it,
   // dumps buffer content to disk, compares results to expectations.
   // Also throws in a balance check on the resulting page tree, because why not.
   fn buffer_test<O, M: ?Sized>(test: &String, operation: O, make_buffer: Box<M>)
-      where O: Fn(&mut super::Buffer) -> (),
-            M: Fn() -> super::BufferResult<super::Buffer> {
+      where O: Fn(&mut Buffer) -> (),
+            M: Fn() -> Result<Buffer> {
     use std::error::Error;
     use std::io::Read;
     let result_path_string = format!("tests/buffer/{}-result.txt", test);
@@ -854,7 +938,7 @@ mod test {
 
   #[test]
   fn write_without_path() {
-    assert!(super::Buffer::new().write().is_err());
+    assert!(Buffer::new().write().is_err());
   }
 
   macro_rules! buffer_test {
@@ -862,12 +946,12 @@ mod test {
       #[test]
       fn $name() {
         let test = stringify!($name).to_string();
-        let buffer_maker: Box<Fn() -> super::BufferResult<super::Buffer>> =
-          if $new_file { Box::new(|| Ok(super::Buffer::new())) }
+        let buffer_maker: Box<Fn() -> Result<Buffer>> =
+          if $new_file { Box::new(|| Ok(Buffer::new())) }
           else { Box::new(|| {
             let test_path_string = format!("tests/buffer/{}.txt", &test);
             let test_path = Path::new(&test_path_string);
-            return super::Buffer::open(&test_path);
+            return Buffer::open(&test_path);
           }) };
         buffer_test(&test, $operation, buffer_maker);
       }
@@ -883,9 +967,9 @@ mod test {
     ($name:ident, $fun:ident, $num_pages:expr) => (
       #[test]
       fn $name() {
-        let mut tree = super::PageTree::new();
+        let mut tree = PageTree::new();
         for _ in 0..$num_pages {
-          tree.$fun(super::Page::new("a".to_string()));
+          tree.$fun(Page::new("a".to_string()));
         }
         assert!(is_balanced(&tree));
       }
@@ -903,11 +987,11 @@ mod test {
     ($name:ident, $num_pages:expr) => (
       #[test]
       fn $name() {
-        let mut tree = super::PageTree::new();
+        let mut tree = PageTree::new();
         let denominator: usize = 4;
         let mut numerator: usize = 0;
         for i in 0..$num_pages {
-          let page = super::Page::new("abc".to_string());
+          let page = Page::new("abc".to_string());
           let fraction = (numerator as f32) / (denominator as f32);
           let offset = ((i as f32) * fraction) as usize * page.length;
           tree.insert_page_at_offset(page, offset);
@@ -922,11 +1006,15 @@ mod test {
   balance_test!(balanced_insert_33, 33);
   balance_test!(balanced_insert_9001, 9001);
 
-  fn is_balanced(tree: &super::PageTree) -> bool {
-    let branch_is_balanced = |branch: &super::PageTreeNode| {
-      match branch {
-        &super::PageTreeNode::Tree(ref tree) => is_balanced(&**tree),
-        _                                    => true,
+  fn is_balanced(tree: &PageTree) -> bool {
+    let branch_is_balanced = |branch: &PageTreeLink| {
+      match *branch {
+        Some(ref boxed_node) =>
+          match **boxed_node {
+            PageTreeNode::Tree(ref tree) => is_balanced(tree),
+            _                            => true,
+          },
+        _                                      => true,
       }
     };
     let left_height = tree.left.height();
@@ -943,7 +1031,7 @@ mod test {
   buffer_test!(page_split_utf8_insert, false, page_split_utf8_insert_operation);
   buffer_test!(long_string_insert, true, long_string_insert_operation);
 
-  fn existing_file_insert_operation(buffer: &mut super::Buffer) {
+  fn existing_file_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset("more".to_string(), 0);
     buffer.insert_at_offset(" than ".to_string(), 4);
     buffer.insert_at_offset(".".to_string(), 25);
@@ -951,20 +1039,20 @@ mod test {
     buffer.insert_at_offset(" and then some".to_string(), buffer_end);
   }
 
-  fn new_file_insert_operation(buffer: &mut super::Buffer) {
+  fn new_file_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset("Here's a second line".to_string(), 1);
     buffer.insert_at_offset(" with a newline\n".to_string(), 21);
     buffer.insert_at_offset("First line go here".to_string(), 0);
     buffer.insert_at_offset(", and it even has a dot.".to_string(), 18);
   }
 
-  fn page_split_utf8_insert_operation(buffer: &mut super::Buffer) {
+  fn page_split_utf8_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset("boop".to_string(), 5);
     buffer.insert_at_offset("boop".to_string(), 22);
     buffer.insert_at_offset("boop".to_string(), 36);
   }
 
-  fn long_string_insert_operation(buffer: &mut super::Buffer) {
+  fn long_string_insert_operation(buffer: &mut Buffer) {
     buffer.insert_at_offset(
       include_str!("../tests/buffer/long_string_insert.txt").to_string(), 1);
   }
@@ -981,7 +1069,7 @@ mod test {
     ];
 
     let test_path = Path::new("tests/buffer/line_column_offset.txt");
-    let buffer = super::Buffer::open(&test_path).unwrap();
+    let buffer = Buffer::open(&test_path).unwrap();
     for &((line, column), expected_offset) in tests.iter() {
       assert_eq!(buffer.tree.line_column_to_offset(line, column),
                  expected_offset);
@@ -1000,7 +1088,7 @@ mod test {
     ];
 
     let test_path = Path::new("tests/buffer/line_column_offset.txt");
-    let buffer = super::Buffer::open(&test_path).unwrap();
+    let buffer = Buffer::open(&test_path).unwrap();
     for &((line, column), expect_char) in tests.iter() {
       assert_eq!(buffer.get_char_by_line_column(line, column), expect_char);
     }
@@ -1021,7 +1109,7 @@ mod test {
   }
 
   fn line_length_test(path: &Path, expect: &[usize]) {
-    let buffer = super::Buffer::open(path).unwrap();
+    let buffer = Buffer::open(path).unwrap();
     assert_eq!(buffer.num_lines(), expect.len());
     for line in 0..buffer.num_lines() {
       assert_eq!(buffer.line_length(line).unwrap(), expect[line]);
@@ -1031,14 +1119,14 @@ mod test {
   #[test]
   fn line_iterator_yields_all_lines() {
     let path = Path::new("tests/buffer/lacking_newline.txt");
-    let buffer = super::Buffer::open(&path).unwrap();
+    let buffer = Buffer::open(&path).unwrap();
     assert_eq!(buffer.line_iter().count(), buffer.num_lines());
   }
 
   #[test]
   fn line_iterator_yields_correct_line_lengths() {
     let path = Path::new("tests/buffer/long_string_insert.txt");
-    let buffer = super::Buffer::open(&path).unwrap();
+    let buffer = Buffer::open(&path).unwrap();
     let mut line = 0;
     for chars in buffer.line_iter() {
       assert_eq!(buffer.line_length(line), Some(chars.count() - 1));
@@ -1050,7 +1138,7 @@ mod test {
   #[test]
   fn char_iterator_yields_all_chars() {
     let path = Path::new("tests/buffer/lacking_newline.txt");
-    let buffer = super::Buffer::open(&path).unwrap();
+    let buffer = Buffer::open(&path).unwrap();
     let mut offset = 0;
     for chars in buffer.line_iter() {
       for character in chars {
@@ -1067,30 +1155,30 @@ mod test {
   buffer_test!(delete_big_range, false, delete_big_range_op);
   buffer_test!(delete_utf8, false, delete_utf8_op);
 
-  fn delete_char_by_char_start_op(buffer: &mut super::Buffer) {
+  fn delete_char_by_char_start_op(buffer: &mut Buffer) {
     for _ in 0..100 { buffer.tree.delete_range(0, 1); }
   }
 
-  fn delete_char_by_char_mid_op(buffer: &mut super::Buffer) {
+  fn delete_char_by_char_mid_op(buffer: &mut Buffer) {
     for _ in 0..100 { buffer.tree.delete_range(68, 69); }
   }
 
-  fn delete_char_by_char_end_op(buffer: &mut super::Buffer) {
+  fn delete_char_by_char_end_op(buffer: &mut Buffer) {
     for i in 0..100 { buffer.tree.delete_range(255 - i, 256 - i); }
   }
 
-  fn delete_big_range_op(buffer: &mut super::Buffer) {
+  fn delete_big_range_op(buffer: &mut Buffer) {
     buffer.delete_range(0, 227, 6, 91).ok().unwrap();
   }
 
-  fn delete_utf8_op(buffer: &mut super::Buffer) {
+  fn delete_utf8_op(buffer: &mut Buffer) {
     buffer.delete_range(0, 18, 2, 144).ok().unwrap();
   }
 
   #[test]
   fn delete_with_bad_input() {
     let path = Path::new("tests/buffer/lacking_newline.txt");
-    let mut buffer = super::Buffer::open(&path).unwrap();
+    let mut buffer = Buffer::open(&path).unwrap();
     assert!(buffer.delete_range(0, 100, 1, 0).is_err());
     assert!(buffer.delete_range(0, 0, 4, 0).is_err());
     assert!(buffer.delete_range(2, 0, 0, 0).is_err());

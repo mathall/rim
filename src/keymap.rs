@@ -109,11 +109,3 @@ bitflags! {
     const MOD_CTRL  = 1 << 2,
   }
 }
-
-#[allow(dead_code)]  // as the name suggests, this function should not be called
-fn totally_useless_function_just_to_suppress_warnings_about_dead_code() {
-  let mut a = MOD_NONE;
-  a.toggle(MOD_NONE); a.remove(MOD_NONE); a.intersects(MOD_NONE);
-  a.is_all(); KeyMod::from_bits_truncate(0); KeyMod::from_bits(0);
-  a.insert(MOD_NONE); a.contains(MOD_NONE);
-}

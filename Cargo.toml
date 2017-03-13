@@ -1,22 +1,23 @@
 [package]
 
 name = "rim"
-version = "0.0.1"
+version = "0.1.0"
 authors = [ "Mathias Hällman <rim@mths.se>" ]
 
 [[bin]]
 name = "rim"
 
-[dependencies.termkey-rs]
-git = "git://github.com/mathall/termkey-rs.git"
-
 [dependencies]
 bitflags = "*"
 docopt = "*"
+futures = "*"
 libc = "*"
 rand = "*"
 rustc-serialize = "*"
 term = "*"
+termkey-rs = { git = "git://github.com/mathall/termkey-rs.git" }
+tokio-core = "*"
+tokio-timer = "*"
 unicode-width = "*"
-uuid = "*"
+uuid = { version = "*", features = ["v4"] }
 vec_map = "*"

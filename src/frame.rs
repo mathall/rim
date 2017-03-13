@@ -12,9 +12,11 @@ use std::cmp;
 use std::collections::{HashMap, vec_deque, VecDeque};
 use std::error;
 use std::fmt;
-use std::mem;
+use std::result;
 
 use screen;
+#[cfg(not(test))]
+use screen::Screen;
 
 use self::Orientation::*;
 use self::SectionSide::*;
@@ -94,7 +96,7 @@ impl SectionPath {
 #[cfg_attr(test, derive(Debug, Eq))]
 enum SectionSide {
   Fst, // Top / Left
-  Snd,  // Bottom / Right
+  Snd, // Bottom / Right
 }
 
 /*
@@ -267,7 +269,7 @@ impl Section {
       // branch found, shift the edge of the other branch to take up the size of
       // the branch being cut, then cut it by replacing the current split with
       // that of the other branch
-      self.split = mem::replace(&mut self.split, None).and_then(|mut split| {
+      self.split = self.split.take().and_then(|mut split| {
         let (either, other) =
           if side == Fst { (&mut split.fst, &mut split.snd) }
           else           { (&mut split.snd, &mut split.fst) };
@@ -277,7 +279,7 @@ impl Section {
           (BORDER_SIZE as isize + size as isize);
         other.shift_edge(split.orientation.opposite(), side, shift);
         assert_eq!(self.size, other.size);
-        mem::replace(&mut other.split, None) }) });
+        other.split.take() }) });
   }
 
   // Gets the aligning base of the section identified by |path|.
@@ -494,7 +496,7 @@ impl Section {
   }
 
   #[cfg(not(test))]
-  fn draw_borders(&self, position: screen::Cell, screen: &mut screen::Screen) {
+  fn draw_borders(&self, position: screen::Cell, screen: &mut Screen) {
     self.split.as_ref().map(|ref split| {
       split.fst.draw_borders(position, screen);
       split.snd.draw_borders(
@@ -559,7 +561,7 @@ impl<'l> LeafSectionIterator<'l> {
     let done_with_root = path.first().map(|go| go == self.side).unwrap_or(true);
 
     // unwind the path until there's an unexplored section of interest waiting
-    loop { if path.pop().map(|v| v != self.side).unwrap_or(true) { break } }
+    while let Some(side) = path.pop() { if side != self.side { break } }
 
     if path.len() == 0 && done_with_root {
       // we got back to the root and we've already been down each side, all done
@@ -576,7 +578,7 @@ impl<'l> LeafSectionIterator<'l> {
 impl<'l> Iterator for LeafSectionIterator<'l> {
   type Item = SectionPath;
 
-  fn next(&mut self) -> Option<SectionPath> {
+  fn next(&mut self) -> Option<Self::Item> {
     let ret = self.next.clone();
     self.next =
       self.next.as_ref().and_then(|last| self.find_next(last.clone()));
@@ -588,7 +590,7 @@ impl<'l> Iterator for LeafSectionIterator<'l> {
  * The various errors that may result from usage of the frame.
  */
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub enum FrameError {
+pub enum Error {
   NoSuchWindow,
   CantCloseLastWindow,
   NoNeighbouringWindow,
@@ -596,30 +598,30 @@ pub enum FrameError {
   NoSuchAdjacentWindow,
 }
 
-impl fmt::Display for FrameError {
+impl fmt::Display for Error {
   fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
     write!(f, "{:?}", *self)
   }
 }
 
-impl error::Error for FrameError {
+impl error::Error for Error {
   fn description(&self) -> &str {
     match *self {
-      FrameError::NoSuchWindow         =>
+      Error::NoSuchWindow         =>
         "The provided WindowId does not refer to a window known by the frame.",
-      FrameError::CantCloseLastWindow  =>
+      Error::CantCloseLastWindow  =>
         "Attempted to close the last window in the frame.",
-      FrameError::NoNeighbouringWindow =>
+      Error::NoNeighbouringWindow =>
         "The window has no neighbours. (it's the last window)",
-      FrameError::NoSuchSequentWindow  =>
+      Error::NoSuchSequentWindow  =>
         "The window had no sequent window in the provided window order.",
-      FrameError::NoSuchAdjacentWindow =>
+      Error::NoSuchAdjacentWindow =>
         "The window had no adjacent window in the provided direction.",
     }
   }
 }
 
-pub type FrameResult<T> = Result<T, FrameError>;
+pub type Result<T> = result::Result<T, Error>;
 
 #[derive(Clone, Copy, PartialEq)]
 #[cfg_attr(test, derive(Debug))]
@@ -660,8 +662,8 @@ impl FrameContext {
     self.window_to_section_path.insert(window.clone(), path);
   }
 
-  fn get_section_path(&self, window: &WindowId) -> FrameResult<&SectionPath> {
-    self.window_to_section_path.get(window).ok_or(FrameError::NoSuchWindow)
+  fn get_section_path(&self, window: &WindowId) -> Result<&SectionPath> {
+    self.window_to_section_path.get(window).ok_or(Error::NoSuchWindow)
   }
 
   fn get_window(&self, path: &SectionPath) -> WindowId {
@@ -699,7 +701,7 @@ impl Frame {
   }
 
   pub fn split_window(&mut self, ctx: &mut FrameContext, window: &WindowId,
-                      orientation: Orientation) -> FrameResult<WindowId> {
+                      orientation: Orientation) -> Result<WindowId> {
     ctx.get_section_path(window).
     map(|path| {
       // first make sure the window is large enough to fit the split
@@ -730,13 +732,13 @@ impl Frame {
   }
 
   pub fn close_window(&mut self, ctx: &mut FrameContext, window: &WindowId)
-      -> FrameResult<()> {
+      -> Result<()> {
     ctx.get_section_path(window).
     map(|path| path.clone()).
     and_then(|path| {
       let mut parent_section_path = path.clone();
       parent_section_path.pop().
-      ok_or(FrameError::CantCloseLastWindow).
+      ok_or(Error::CantCloseLastWindow).
       map(|side| {
         // get orientation we want to reset layout along after closing window
         let reset_orientation =
@@ -774,12 +776,12 @@ impl Frame {
   // the closest neighbour is the previous window.
   pub fn get_closest_neighbouring_window(&self, ctx: &FrameContext,
                                          window: &WindowId)
-      -> FrameResult<WindowId> {
+      -> Result<WindowId> {
     ctx.get_section_path(window).
     map(|path| path.clone()).
     and_then(|path|
       self.main_section.get_aligning_base(&mut path.iter()).
-      ok_or(FrameError::NoNeighbouringWindow).
+      ok_or(Error::NoNeighbouringWindow).
       and_then(|(aligning_base_path, _, _)|
         self.get_sequent_window(ctx, window, NextWindow, false).
         and_then(|next_window|
@@ -789,7 +791,7 @@ impl Frame {
           and_then(|next_path| {
             let next_is_neighbour = aligning_base_path.does_prefix(&next_path);
             if next_is_neighbour { Ok(ctx.get_window(&next_path)) }
-            else                 { Err(FrameError::NoNeighbouringWindow) }})).
+            else                 { Err(Error::NoNeighbouringWindow) }})).
         or_else(|_|
           self.get_sequent_window(ctx, window, PreviousWindow, false))))
   }
@@ -797,7 +799,7 @@ impl Frame {
   // Gets next or previous window in sequence determined by the section tree.
   pub fn get_sequent_window(&self, ctx: &FrameContext, window: &WindowId,
                             order: WindowOrder, wrap: bool)
-      -> FrameResult<WindowId> {
+      -> Result<WindowId> {
     let side = if order == NextWindow { Snd } else { Fst };
     ctx.get_section_path(window).
     and_then(|path|
@@ -805,25 +807,25 @@ impl Frame {
         next().or_else(||
           if wrap { LeafSectionIterator::new(&self.main_section, side).next() }
           else    { None }).
-        ok_or(FrameError::NoSuchSequentWindow)).
+        ok_or(Error::NoSuchSequentWindow)).
     map(|path| ctx.get_window(&path))
   }
 
   // Picks a point next to the window's rect depending on |direction| and
   // performs hit tests down the section tree to find the adjacent window.
   pub fn get_adjacent_window(&self, ctx: &FrameContext, window: &WindowId,
-                             direction: Direction) -> FrameResult<WindowId> {
+                             direction: Direction) -> Result<WindowId> {
     self.get_window_rect(ctx, window).
     and_then(|rect|
       adjacent_window_point(rect, direction).
       and_then(|point|
         self.main_section.get_section_at_point(screen::Cell(0, 0), point)).
-      ok_or(FrameError::NoSuchAdjacentWindow)).
+      ok_or(Error::NoSuchAdjacentWindow)).
     map(|path| ctx.get_window(&path))
   }
 
   pub fn get_window_rect(&self, ctx: &FrameContext, window: &WindowId)
-      -> FrameResult<screen::Rect> {
+      -> Result<screen::Rect> {
     ctx.get_section_path(window).map(|path| self.get_section_rect(path))
   }
 
@@ -837,7 +839,7 @@ impl Frame {
   // Returns the amount the resize was able to absorb.
   pub fn resize_window(&mut self, ctx: &FrameContext, window: &WindowId,
                        orientation: Orientation, amount: isize)
-      -> FrameResult<isize> {
+      -> Result<isize> {
     ctx.get_section_path(window).
     map(|path| {
       let clamped_amount = if amount > 0 { amount } else {
@@ -926,7 +928,7 @@ impl Frame {
   }
 
   #[cfg(not(test))]
-  pub fn draw_borders(&self, screen: &mut screen::Screen) {
+  pub fn draw_borders(&self, screen: &mut Screen) {
     self.main_section.draw_borders(screen::Cell(0, 0), screen);
   }
 }
@@ -960,12 +962,10 @@ mod test {
 
   use screen;
 
-  use super::Orientation::*;
-  use super::SectionSide::*;
-  use super::WindowOrder::*;
+  use super::*;
 
   // sanity check the state of a frame
-  fn check_frame_invariants(frame: &super::Frame, ctx: &super::FrameContext) {
+  fn check_frame_invariants(frame: &Frame, ctx: &FrameContext) {
     check_size_invariant(frame);
     check_window_to_section_map_invariant(frame, ctx);
   }
@@ -975,13 +975,12 @@ mod test {
   // subsections are as small as they can be. In either case, the size of a
   // section with a split does always equal the union of the subsections' sizes
   // along with border size.
-  fn check_size_invariant(frame: &super::Frame) {
+  fn check_size_invariant(frame: &Frame) {
     check_size_invariant_along(frame, Vertical);
     check_size_invariant_along(frame, Horizontal);
   }
 
-  fn check_size_invariant_along(frame: &super::Frame,
-                                orientation: super::Orientation) {
+  fn check_size_invariant_along(frame: &Frame, orientation: Orientation) {
     let screen::Size(frame_rows, frame_cols) = frame.size;
     let screen::Size(section_rows, section_cols) = frame.main_section.size;
     let (frame_size, section_size) =
@@ -995,8 +994,8 @@ mod test {
       equal_subsection_size_along(&frame.main_section, orientation));
   }
 
-  fn equal_subsection_size_along(section: &super::Section,
-                                 orientation: super::Orientation) -> bool {
+  fn equal_subsection_size_along(section: &Section, orientation: Orientation)
+      -> bool {
     match section.split {
       None            => true,
       Some(ref split) => {
@@ -1013,19 +1012,18 @@ mod test {
               fst_size == size && size == snd_size
             }
             else {
-              size == (fst_size + snd_size + super::BORDER_SIZE)
+              size == (fst_size + snd_size + BORDER_SIZE)
             }
       }
     }
   }
 
-  fn all_minimized_along(section: &super::Section,
-                         orientation: super::Orientation) -> bool {
+  fn all_minimized_along(section: &Section, orientation: Orientation) -> bool {
     match section.split {
       None            => {
         let screen::Size(rows, cols) = section.size;
         let size = if orientation == Vertical { rows } else { cols };
-        size == super::MIN_SECTION_SIZE
+        size == MIN_SECTION_SIZE
       }
       Some(ref split) => {
         if orientation == split.orientation {
@@ -1048,12 +1046,11 @@ mod test {
   // All windows in the frame context should lead to a leaf in the section tree,
   // and all leafs in the section tree should have a corresponding window id.
   // There may also be no dupes in the map.
-  fn check_window_to_section_map_invariant(frame: &super::Frame,
-                                           ctx: &super::FrameContext) {
+  fn check_window_to_section_map_invariant(frame: &Frame, ctx: &FrameContext) {
     use std::collections::HashSet;
-    let actual_leafs: HashSet<super::SectionPath> =
-      super::LeafSectionIterator::new(&frame.main_section, Snd).collect();
-    let leafs_in_context: HashSet<super::SectionPath> =
+    let actual_leafs: HashSet<SectionPath> =
+      LeafSectionIterator::new(&frame.main_section, Snd).collect();
+    let leafs_in_context: HashSet<SectionPath> =
       ctx.window_to_section_path.values().map(|v| v.clone()).collect();
     assert_eq!(actual_leafs, leafs_in_context);
     assert_eq!(leafs_in_context.len(), ctx.window_to_section_path.len());
@@ -1064,7 +1061,7 @@ mod test {
   // Starting with one window and assigning it the number 0 then splitting
   // sequentially and assigning each new window the next number results in the
   // frames and section trees depicted along with the split descriptors below.
-  const SPLIT_DESCRIPTORS: &'static [&'static  [(usize, super::Orientation)]] =
+  const SPLIT_DESCRIPTORS: &'static [&'static  [(usize, Orientation)]] =
     &[
       // -----------------                     V
       // |     0     |   |                    / \
@@ -1109,10 +1106,9 @@ mod test {
         (1, Vertical), (3, Vertical), (2, Vertical)],
     ];
 
-  fn setup_frame(descriptor_nr: usize)
-      -> (super::Frame, super::FrameContext, Vec<super::WindowId>) {
+  fn setup_frame(descriptor_nr: usize) -> (Frame, FrameContext, Vec<WindowId>) {
     let mut windows = Vec::new();
-    let (mut frame, mut ctx, main_window) = super::Frame::new();
+    let (mut frame, mut ctx, main_window) = Frame::new();
     frame.set_size(screen::Size(100, 100));
     windows.push(main_window);
 
@@ -1129,7 +1125,6 @@ mod test {
   // Tear down frames in random window order, checking invariants along the way.
   #[test]
   fn split_and_close() {
-    use self::rand;
     let mut rng = rand::thread_rng();
     let select_window = |rng: &mut rand::ThreadRng, windows: &mut Vec<usize>| {
       let selected = *rand::sample(rng, windows.iter(), 1)[0];
@@ -1146,7 +1141,7 @@ mod test {
           frame.close_window(&mut ctx, &windows[close_nr]).unwrap();
           check_frame_invariants(&frame, &ctx);
         }
-        assert_eq!(Err(super::FrameError::CantCloseLastWindow),
+        assert_eq!(Err(Error::CantCloseLastWindow),
           frame.close_window(&mut ctx, &windows[close_last]));
       }
     }
@@ -1186,11 +1181,9 @@ mod test {
       frame.get_window_rect(&ctx, &windows[win]).unwrap();
     let win_sizes = [
       screen::Size(win_rows - 50, win_cols + 20),
-      screen::Size(5 * super::MIN_SECTION_SIZE + 4 * super::BORDER_SIZE,
-        super::MIN_SECTION_SIZE),
-      screen::Size(130, super::MIN_SECTION_SIZE),
-      screen::Size(130,
-        100 - 3 * super::MIN_SECTION_SIZE - 3 * super::BORDER_SIZE)
+      screen::Size(5 * MIN_SECTION_SIZE + 4 * BORDER_SIZE, MIN_SECTION_SIZE),
+      screen::Size(130, MIN_SECTION_SIZE),
+      screen::Size(130, 100 - 3 * MIN_SECTION_SIZE - 3 * BORDER_SIZE)
     ];
     do_frame_resizes(&mut frame, &ctx, &windows[win], &adds, &win_sizes);
 
@@ -1204,12 +1197,10 @@ mod test {
       frame.get_window_rect(&ctx, &windows[win]).unwrap();
     let win_sizes = [
       screen::Size(win_rows, win_cols),
-      screen::Size(super::MIN_SECTION_SIZE,
-        start_size + 20 - 60 - super::MIN_SECTION_SIZE - super::BORDER_SIZE),
-      screen::Size(super::MIN_SECTION_SIZE,
-        3 * super::MIN_SECTION_SIZE + 2 * super::BORDER_SIZE),
-      screen::Size(super::MIN_SECTION_SIZE,
-        3 * super::MIN_SECTION_SIZE + 2 * super::BORDER_SIZE),
+      screen::Size(MIN_SECTION_SIZE,
+        start_size + 20 - 60 - MIN_SECTION_SIZE - BORDER_SIZE),
+      screen::Size(MIN_SECTION_SIZE, 3 * MIN_SECTION_SIZE + 2 * BORDER_SIZE),
+      screen::Size(MIN_SECTION_SIZE, 3 * MIN_SECTION_SIZE + 2 * BORDER_SIZE),
     ];
     do_frame_resizes(&mut frame, &ctx, &windows[win], &adds, &win_sizes);
   }
@@ -1228,14 +1219,12 @@ mod test {
     let screen::Rect(_, screen::Size(win_2_rows, _)) =
       frame.get_window_rect(&ctx, &windows[2]).unwrap();
     let win_sizes = [
-      screen::Size(win_rows,
-        start_size - 70 - super::MIN_SECTION_SIZE - super::BORDER_SIZE),
-      screen::Size(win_rows,
-        start_size - 70 - super::MIN_SECTION_SIZE - super::BORDER_SIZE),
-      screen::Size(win_rows + win_2_rows + 10 - 50 - super::MIN_SECTION_SIZE,
-        super::MIN_SECTION_SIZE),
-      screen::Size(win_rows + win_2_rows + 10 - 50 - super::MIN_SECTION_SIZE,
-        super::MIN_SECTION_SIZE),
+      screen::Size(win_rows, start_size - 70 - MIN_SECTION_SIZE - BORDER_SIZE),
+      screen::Size(win_rows, start_size - 70 - MIN_SECTION_SIZE - BORDER_SIZE),
+      screen::Size(win_rows + win_2_rows + 10 - 50 - MIN_SECTION_SIZE,
+        MIN_SECTION_SIZE),
+      screen::Size(win_rows + win_2_rows + 10 - 50 - MIN_SECTION_SIZE,
+        MIN_SECTION_SIZE),
     ];
     do_frame_resizes(&mut frame, &ctx, &windows[win], &adds, &win_sizes);
 
@@ -1248,12 +1237,12 @@ mod test {
     let screen::Rect(_, screen::Size(win_rows, _)) =
       frame.get_window_rect(&ctx, &windows[win]).unwrap();
     let win_sizes = [
-      screen::Size(win_rows, super::MIN_SECTION_SIZE),
-      screen::Size(win_rows, super::MIN_SECTION_SIZE),
-      screen::Size(win_rows + win_2_rows + 10 - 50 - super::MIN_SECTION_SIZE,
-        super::MIN_SECTION_SIZE),
-      screen::Size(win_rows + win_2_rows + 10 - 50 - super::MIN_SECTION_SIZE,
-        50 - super::MIN_SECTION_SIZE - super::BORDER_SIZE),
+      screen::Size(win_rows, MIN_SECTION_SIZE),
+      screen::Size(win_rows, MIN_SECTION_SIZE),
+      screen::Size(win_rows + win_2_rows + 10 - 50 - MIN_SECTION_SIZE,
+        MIN_SECTION_SIZE),
+      screen::Size(win_rows + win_2_rows + 10 - 50 - MIN_SECTION_SIZE,
+        50 - MIN_SECTION_SIZE - BORDER_SIZE),
     ];
     do_frame_resizes(&mut frame, &ctx, &windows[win], &adds, &win_sizes);
   }
@@ -1261,9 +1250,8 @@ mod test {
   // Add to the frame's size, as described by the row/col pairs in |adds|, and
   // compare the size of |window| to the expected sizes in |win_sizes| after
   // each resize. As always, also check invariants.
-  fn do_frame_resizes(frame: &mut super::Frame, ctx: &super::FrameContext,
-                      window: &super::WindowId, adds: &[(i16, i16)],
-                      win_sizes: &[screen::Size]) {
+  fn do_frame_resizes(frame: &mut Frame, ctx: &FrameContext, window: &WindowId,
+                      adds: &[(i16, i16)], win_sizes: &[screen::Size]) {
     for (&(add_rows, add_cols), win_size_expect) in
         adds.iter().zip(win_sizes.iter()) {
       let screen::Size(frame_rows, frame_cols) = frame.size;
@@ -1310,7 +1298,7 @@ mod test {
       frame.get_window_rect(&ctx, &windows[2]).unwrap();
 
     let win6_resize = win2_rows as i16 + 5;
-    let win2_resize = super::MIN_SECTION_SIZE as i16 - win2_rows as i16;
+    let win2_resize = MIN_SECTION_SIZE as i16 - win2_rows as i16;
     let resize = (6, Vertical, win6_resize as isize);
     let mut window_changes = VecMap::new();
     window_changes.insert(2, win2_resize);
@@ -1337,9 +1325,9 @@ mod test {
       frame.get_window_rect(&ctx, &windows[4]).unwrap();
 
     let resize = (5, Vertical, 1000);
-    let win0_change = super::MIN_SECTION_SIZE as i16 - win0_rows as i16;
-    let win1_change = super::MIN_SECTION_SIZE as i16 - win1_rows as i16;
-    let win4_change = super::MIN_SECTION_SIZE as i16 - win4_rows as i16;
+    let win0_change = MIN_SECTION_SIZE as i16 - win0_rows as i16;
+    let win1_change = MIN_SECTION_SIZE as i16 - win1_rows as i16;
+    let win4_change = MIN_SECTION_SIZE as i16 - win4_rows as i16;
     let mut window_changes = VecMap::new();
     window_changes.insert(0, win0_change);
     window_changes.insert(1, win1_change);
@@ -1354,7 +1342,7 @@ mod test {
       frame.get_window_rect(&ctx, &windows[0]).unwrap();
 
     let resize = (2, Horizontal, 1000);
-    let win0_change = super::MIN_SECTION_SIZE as i16 - win0_cols as i16;
+    let win0_change = MIN_SECTION_SIZE as i16 - win0_cols as i16;
     let mut window_changes = VecMap::new();
     window_changes.insert(0, win0_change);
     window_changes.insert(2, -win0_change);
@@ -1395,7 +1383,7 @@ mod test {
     let screen::Rect(_, screen::Size(win7_rows, _)) =
       frame.get_window_rect(&ctx, &windows[7]).unwrap();
 
-    let win3_min_size = 3 * super::MIN_SECTION_SIZE + 2 * super::BORDER_SIZE;
+    let win3_min_size = 3 * MIN_SECTION_SIZE + 2 * BORDER_SIZE;
 
     let win3_resize = win3_min_size as i16 - win3_rows as i16;
     let resize = (3, Vertical, win3_resize as isize);
@@ -1403,9 +1391,9 @@ mod test {
     window_changes.insert(2, -win3_resize);
     window_changes.insert(3, win3_resize);
     window_changes.insert(4, win3_resize);
-    window_changes.insert(5, super::MIN_SECTION_SIZE as i16 - win5_rows as i16);
-    window_changes.insert(6, super::MIN_SECTION_SIZE as i16 - win6_rows as i16);
-    window_changes.insert(7, super::MIN_SECTION_SIZE as i16 - win7_rows as i16);
+    window_changes.insert(5, MIN_SECTION_SIZE as i16 - win5_rows as i16);
+    window_changes.insert(6, MIN_SECTION_SIZE as i16 - win6_rows as i16);
+    window_changes.insert(7, MIN_SECTION_SIZE as i16 - win7_rows as i16);
     do_window_resize(&mut frame, &ctx, &windows, &window_changes, resize);
 
     let resize = (3, Vertical, -100);
@@ -1418,13 +1406,11 @@ mod test {
 
   // Assert that all windows of the frame has the expected size after resizing
   // one window.
-  fn do_window_resize(frame: &mut super::Frame, ctx: &super::FrameContext,
-                      windows: &Vec<super::WindowId>,
-                      window_changes: &VecMap<i16>,
-                      (win, orientation, amount):
-                        (usize, super::Orientation, isize)) {
+  fn do_window_resize(frame: &mut Frame, ctx: &FrameContext,
+                      windows: &Vec<WindowId>, window_changes: &VecMap<i16>,
+                      (win, orientation, amount): (usize, Orientation, isize)) {
     // calculate and collect expected sizes after resizing a window
-    let expectations: Vec<(super::WindowId, screen::Size)> =
+    let expectations: Vec<(WindowId, screen::Size)> =
       (0..windows.len()).map(|win| {
         let window = windows[win].clone();
         let change = window_changes.get(win).map(|&x| x).unwrap_or(0);
@@ -1469,8 +1455,8 @@ mod test {
 
   #[test]
   fn get_no_closest_neighbour() {
-    let (frame, ctx, main_window) = super::Frame::new();
-    assert_eq!(Err(super::FrameError::NoNeighbouringWindow),
+    let (frame, ctx, main_window) = Frame::new();
+    assert_eq!(Err(Error::NoNeighbouringWindow),
       frame.get_closest_neighbouring_window(&ctx, &main_window));
   }
 
@@ -1504,9 +1490,9 @@ mod test {
     let first_window = windows[sequence[0]].clone();
     let last_window = windows[sequence[sequence.len() - 1]].clone();
 
-    assert_eq!(Err(super::FrameError::NoSuchSequentWindow),
+    assert_eq!(Err(Error::NoSuchSequentWindow),
       frame.get_sequent_window(&ctx, &first_window, PreviousWindow, false));
-    assert_eq!(Err(super::FrameError::NoSuchSequentWindow),
+    assert_eq!(Err(Error::NoSuchSequentWindow),
       frame.get_sequent_window(&ctx, &last_window, NextWindow, false));
 
     let order = NextWindow;
@@ -1580,22 +1566,22 @@ mod test {
         (7, Some(1), None, Some(5), Some(6))]);
   }
 
-  fn try_adjacent_windows(frame: &super::Frame, ctx: &super::FrameContext,
-                          windows: &Vec<super::WindowId>,
+  fn try_adjacent_windows(frame: &Frame, ctx: &FrameContext,
+                          windows: &Vec<WindowId>,
                           adjacencies: &[(usize, Option<usize>, Option<usize>,
                                           Option<usize>, Option<usize>)]) {
-    let err = super::FrameError::NoSuchAdjacentWindow;
+    let err = Error::NoSuchAdjacentWindow;
     let expectation_as_frame_result = |opt: Option<usize>|
       opt.map(|adj| windows[adj].clone()).ok_or(err);
     for &(win, left, right, up, down) in adjacencies.iter() {
       assert_eq!(expectation_as_frame_result(left),
-        frame.get_adjacent_window(ctx, &windows[win], super::Direction::Left));
+        frame.get_adjacent_window(ctx, &windows[win], Direction::Left));
       assert_eq!(expectation_as_frame_result(right),
-        frame.get_adjacent_window(ctx, &windows[win], super::Direction::Right));
+        frame.get_adjacent_window(ctx, &windows[win], Direction::Right));
       assert_eq!(expectation_as_frame_result(up),
-        frame.get_adjacent_window(ctx, &windows[win], super::Direction::Up));
+        frame.get_adjacent_window(ctx, &windows[win], Direction::Up));
       assert_eq!(expectation_as_frame_result(down),
-        frame.get_adjacent_window(ctx, &windows[win], super::Direction::Down));
+        frame.get_adjacent_window(ctx, &windows[win], Direction::Down));
     }
   }
 }
