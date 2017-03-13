@@ -1,6 +1,6 @@
 [root]
 name = "rim"
-version = "0.0.1"
+version = "0.1.0"
 dependencies = [
  "bitflags 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
  "docopt 0.7.0 (registry+https://github.com/rust-lang/crates.io-index)",
