@@ -10,7 +10,10 @@
 extern crate bitflags;
 extern crate docopt;
 extern crate futures;
-extern crate rustc_serialize;
+extern crate serde;
+#[cfg(not(test))]
+#[macro_use]
+extern crate serde_derive;
 extern crate tokio_timer;
 
 mod buffer;
@@ -41,7 +44,7 @@ use command::{Cmd, CmdThread, WinCmd};
 #[cfg(not(test))]
 use frame::{Frame, FrameContext};
 #[cfg(not(test))]
-use keymap::{Key, KeySym};
+use keymap::{Key, KeySym, KeyMod};
 #[cfg(not(test))]
 use screen::Screen;
 #[cfg(not(test))]
@@ -590,7 +593,7 @@ Options:
 ";
 
 #[cfg(not(test))]
-#[derive(RustcDecodable)]
+#[derive(Deserialize)]
 struct Args {
   arg_file: Option<String>,
   flag_version: bool,
@@ -608,7 +611,7 @@ enum Event {
 
 #[cfg(not(test))]
 fn main() {
-  let args: Args = docopt::Docopt::new(USAGE).and_then(|d| d.decode()).
+  let args: Args = docopt::Docopt::new(USAGE).and_then(|d| d.deserialize()).
                    unwrap_or_else(|e| e.exit());
   if args.flag_version {
     println!("Rim - {}", env!("CARGO_PKG_VERSION"));
@@ -620,9 +623,9 @@ fn main() {
   let _term_input = input::start(key_tx);
 
   let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
-  cmd_tx.send(Cmd::ResetLayout).unwrap();
+  cmd_tx.unbounded_send(Cmd::ResetLayout).unwrap();
   let filename = args.arg_file.unwrap_or("src/rim.rs".to_string());
-  cmd_tx.send(Cmd::WinCmd(WinCmd::OpenBuffer(
+  cmd_tx.unbounded_send(Cmd::WinCmd(WinCmd::OpenBuffer(
     PathBuf::from(&filename)))).unwrap();
   let cmd_thread = command::start(key_rx, cmd_tx);
 
@@ -690,78 +693,78 @@ fn main() {
 #[cfg(not(test))]
 fn default_mode() -> command::Mode {
   let mut mode = command::Mode::new();
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'h', mods: KeyMod::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Left));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'l', mods: KeyMod::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Right));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'k', mods: KeyMod::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Up));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'j', mods: KeyMod::MOD_NONE}],
     Cmd::MoveFocus(frame::Direction::Down));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'v', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'v', mods: KeyMod::MOD_NONE}],
     Cmd::SplitWindow(frame::Orientation::Vertical));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 's', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 's', mods: KeyMod::MOD_NONE}],
     Cmd::SplitWindow(frame::Orientation::Horizontal));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'c', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'c', mods: KeyMod::MOD_NONE}],
     Cmd::CloseWindow);
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: '=', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: '=', mods: KeyMod::MOD_NONE}],
     Cmd::ResetLayout);
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'q', mods: KeyMod::MOD_CTRL}],
     Cmd::QuitWindow);
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: keymap::MOD_CTRL},
-                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_CTRL},
+                       Key::Unicode{codepoint: 'q', mods: KeyMod::MOD_NONE}],
     Cmd::QuitWindow);
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Left, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Left, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Right, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Right, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNext)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Up, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Up, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineUp)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Down, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Down, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineDown)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Home, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Home, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::StartOfLine)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::End, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::End, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::EndOfLine)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Pageup, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Pageup, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::PageUp));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Pagedown, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Pagedown, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::PageDown));
   // for testing purposes
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: KeyMod::MOD_NONE}],
     Cmd::GrowWindow(frame::Orientation::Horizontal));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'y', mods: KeyMod::MOD_CTRL}],
     Cmd::ShrinkWindow(frame::Orientation::Horizontal));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: KeyMod::MOD_NONE}],
     Cmd::GrowWindow(frame::Orientation::Vertical));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: KeyMod::MOD_CTRL}],
     Cmd::ShrinkWindow(frame::Orientation::Vertical));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'n', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'n', mods: KeyMod::MOD_NONE}],
     Cmd::ShiftFocus(frame::WindowOrder::NextWindow));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'N', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'N', mods: KeyMod::MOD_NONE}],
     Cmd::ShiftFocus(frame::WindowOrder::PreviousWindow));
   // for convenience until a proper command line is implemented
-  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE},
-                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: KeyMod::MOD_NONE},
+                       Key::Unicode{codepoint: 'q', mods: KeyMod::MOD_NONE},
+                       Key::Unicode{codepoint: 'a', mods: KeyMod::MOD_NONE},
+                       Key::Sym{sym: KeySym::Enter, mods: KeyMod::MOD_NONE}],
     Cmd::Quit);
-  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'q', mods: keymap::MOD_NONE},
-                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: KeyMod::MOD_NONE},
+                       Key::Unicode{codepoint: 'q', mods: KeyMod::MOD_NONE},
+                       Key::Sym{sym: KeySym::Enter, mods: KeyMod::MOD_NONE}],
     Cmd::QuitWindow);
-  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'w', mods: keymap::MOD_NONE},
-                       Key::Sym{sym: KeySym::Enter, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: ':', mods: KeyMod::MOD_NONE},
+                       Key::Unicode{codepoint: 'w', mods: KeyMod::MOD_NONE},
+                       Key::Sym{sym: KeySym::Enter, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::SaveBuffer));
   return mode;
 }
@@ -769,79 +772,79 @@ fn default_mode() -> command::Mode {
 #[cfg(not(test))]
 fn default_normal_mode() -> command::Mode {
   let mut mode = command::Mode::new();
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'h', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'h', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrev)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'l', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'l', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNext)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'k', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'k', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineUp)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'j', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'j', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LineDown)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Insert, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Insert, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertMode));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'i', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'i', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertMode));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'I', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'I', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertModeStartOfLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'a', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertModeAppend));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'A', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'A', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertModeAppendEndOfLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'o', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'o', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertModeNextLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'O', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'O', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterInsertModePreviousLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'g', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'g', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'g', mods: KeyMod::MOD_NONE},
+                       Key::Unicode{codepoint: 'g', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::FirstLine)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'G', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'G', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::LastLine)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: ' ', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: ' ', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNextFlat)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Space, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Space, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharNextFlat)));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Del, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Del, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrevFlat)));
   mode.keychain.bind(
-    &[Key::Sym{sym: KeySym::Backspace, mods: keymap::MOD_NONE}],
+    &[Key::Sym{sym: KeySym::Backspace, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::CharPrevFlat)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: '0', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: '0', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::StartOfLine)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: '$', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: '$', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::MoveCaret(caret::Adjustment::EndOfLine)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'b', mods: KeyMod::MOD_CTRL}],
     Cmd::WinCmd(WinCmd::PageUp));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'f', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'f', mods: KeyMod::MOD_CTRL}],
     Cmd::WinCmd(WinCmd::PageDown));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'u', mods: KeyMod::MOD_CTRL}],
     Cmd::WinCmd(WinCmd::HalfPageUp));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: keymap::MOD_CTRL}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: KeyMod::MOD_CTRL}],
     Cmd::WinCmd(WinCmd::HalfPageDown));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::DeleteOnLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'x', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'x', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::DeleteOnLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'X', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'X', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::BackspaceOnLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE},
-                       Key::Unicode{codepoint: 'd', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'd', mods: KeyMod::MOD_NONE},
+                       Key::Unicode{codepoint: 'd', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::DeleteLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'D', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'D', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::DeleteRestOfLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'C', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'C', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::ChangeRestOfLine));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'r', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'r', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterReplaceMode(false)));
-  mode.keychain.bind(&[Key::Unicode{codepoint: 'R', mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Unicode{codepoint: 'R', mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterReplaceMode(true)));
   // for testing purposes
-  mode.keychain.bind(&[Key::Fn{num: 1, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Fn{num: 1, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/rim.rs"))));
-  mode.keychain.bind(&[Key::Fn{num: 2, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Fn{num: 2, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/buffer.rs"))));
-  mode.keychain.bind(&[Key::Fn{num: 3, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Fn{num: 3, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/command.rs"))));
-  mode.keychain.bind(&[Key::Fn{num: 4, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Fn{num: 4, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/frame.rs"))));
   return mode;
 }
@@ -858,14 +861,14 @@ fn key_to_string(key: Key) -> Option<String> {
 #[cfg(not(test))]
 fn default_insert_mode() -> command::Mode {
   let mut mode = command::Mode::new();
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Escape, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Escape, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::EnterNormalMode));
   mode.keychain.bind(
-    &[Key::Sym{sym: KeySym::Backspace, mods: keymap::MOD_NONE}],
+    &[Key::Sym{sym: KeySym::Backspace, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::Backspace));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Del, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Del, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::Backspace));
-  mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: keymap::MOD_NONE}],
+  mode.keychain.bind(&[Key::Sym{sym: KeySym::Delete, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::Delete));
   fn fallback(key: keymap::Key) -> Option<Cmd> {
     key_to_string(key).map(|string| Cmd::WinCmd(WinCmd::Insert(string)))
