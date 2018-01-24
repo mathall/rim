@@ -61,13 +61,14 @@ impl CmdThread {
   }
 
   fn send(&self, msg: Msg) {
-    self.msg_tx.send(msg).ok().expect("command thread died");
+    self.msg_tx.unbounded_send(msg).ok().expect("command thread died");
   }
 }
 
 impl Drop for CmdThread {
   fn drop(&mut self) {
-    self.kill_tx.take().expect("CmdThread already killed.").complete(());
+    self.kill_tx.take().expect("CmdThread already killed.").send(()).expect(
+      "Input thread died prematurely.");
     self.died_rx.take().expect("CmdThread already killed.").wait().expect(
       "Input thread died prematurely.");
   }
@@ -130,7 +131,7 @@ fn cmd_thread(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
       let timeout =
         tokio_timer::wheel().tick_duration(Duration::from_millis(10)).build().
         sleep(Duration::from_millis(TIMEOUT)).then(move |_| {
-            tx.send(seq).expect("Oneshot channel died.");
+            tx.unbounded_send(seq).expect("Oneshot channel died.");
             Ok(())
           });
       timeout_core_handle.spawn(timeout);
@@ -187,7 +188,7 @@ fn cmd_thread(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
         MatchResult::Complete(cmd, num) => {
           if !cmd_acknowledged { break; } else {
             for _ in 0..num { keys.pop_front(); front_seq += 1; }
-            cmd_tx.send(cmd).expect("Command channel died.");
+            cmd_tx.unbounded_send(cmd).expect("Command channel died.");
             cmd_acknowledged = false;
           }
         }
@@ -199,7 +200,7 @@ fn cmd_thread(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
 
   core.run(cmd_loop).ok();
 
-  died_tx.complete(());
+  died_tx.send(()).expect("Input thread died prematurely.");
 }
 
 /*
