@@ -18,7 +18,6 @@ use self::futures::sync::oneshot;
 use self::termkey::{TermKeyEvent, TermKeyResult};
 use self::termkey::c::TermKeySym;
 
-use keymap;
 use keymap::{Key, KeyMod, KeySym};
 
 #[cfg(not(test))]
@@ -155,7 +154,7 @@ fn input_loop(kill_rx: oneshot::Receiver<()>, died_tx: oneshot::Sender<()>,
 
   input_loop.wait().ok();
 
-  died_tx.send(()).expect("Input thread died prematurely.");
+  died_tx.send(()).expect("Main thread died prematurely.");
 }
 
 fn translate_key(key: TermKeyEvent) -> Option<Key> {
@@ -239,15 +238,15 @@ fn translate_sym(sym: TermKeySym) -> KeySym {
 }
 
 fn translate_mods(mods: termkey::c::X_TermKey_KeyMod) -> KeyMod {
-  let mut ret = keymap::KeyMod::MOD_NONE;
+  let mut ret = KeyMod::MOD_NONE;
   if mods.contains(termkey::c::TERMKEY_KEYMOD_SHIFT) {
-    ret.insert(keymap::KeyMod::MOD_SHIFT);
+    ret.insert(KeyMod::MOD_SHIFT);
   }
   if mods.contains(termkey::c::TERMKEY_KEYMOD_ALT) {
-    ret.insert(keymap::KeyMod::MOD_ALT);
+    ret.insert(KeyMod::MOD_ALT);
   }
   if mods.contains(termkey::c::TERMKEY_KEYMOD_CTRL) {
-    ret.insert(keymap::KeyMod::MOD_CTRL);
+    ret.insert(KeyMod::MOD_CTRL);
   }
   return ret;
 }
@@ -265,7 +264,6 @@ mod test {
   use self::futures::{Future, Stream};
   use self::futures::sync::{mpsc, oneshot};
 
-  use keymap;
   use keymap::{Key, KeySym};
 
   use super::*;
@@ -276,16 +274,16 @@ mod test {
   fn test_input() {
     // pairs of input bytes on "stdin" and corresponding expected key output
     let input_output_pairs = vec!(
-      (vec!(0x61), Key::Unicode{codepoint: 'a', mods: keymap::KeyMod::MOD_NONE}),
-      (vec!(0x1B, 0x61), Key::Unicode{codepoint: 'a', mods: keymap::KeyMod::MOD_ALT}),
-      (vec!(0x1B), Key::Sym{sym: KeySym::Escape, mods: keymap::KeyMod::MOD_NONE}),
-      (vec!(0x61), Key::Unicode{codepoint: 'a', mods: keymap::KeyMod::MOD_NONE}),
-      (vec!(0x03), Key::Unicode{codepoint: 'c', mods: keymap::KeyMod::MOD_CTRL}),
+      (vec!(0x61), Key::Unicode{codepoint: 'a', mods: KeyMod::MOD_NONE}),
+      (vec!(0x1B, 0x61), Key::Unicode{codepoint: 'a', mods: KeyMod::MOD_ALT}),
+      (vec!(0x1B), Key::Sym{sym: KeySym::Escape, mods: KeyMod::MOD_NONE}),
+      (vec!(0x61), Key::Unicode{codepoint: 'a', mods: KeyMod::MOD_NONE}),
+      (vec!(0x03), Key::Unicode{codepoint: 'c', mods: KeyMod::MOD_CTRL}),
       (vec!(0x1B, 0x5B, 0x41),
-        Key::Sym{sym: KeySym::Up, mods: keymap::KeyMod::MOD_NONE}),
-      (vec!(0x1B, 0x4F, 0x53), Key::Fn{num: 4, mods: keymap::KeyMod::MOD_NONE}),
+        Key::Sym{sym: KeySym::Up, mods: KeyMod::MOD_NONE}),
+      (vec!(0x1B, 0x4F, 0x53), Key::Fn{num: 4, mods: KeyMod::MOD_NONE}),
       (vec!(0xE3, 0x81, 0x82),
-        Key::Unicode{codepoint: 'あ', mods: keymap::KeyMod::MOD_NONE}),
+        Key::Unicode{codepoint: 'あ', mods: KeyMod::MOD_NONE}),
     );
 
     let inputs: Vec<Vec<u8>> =
