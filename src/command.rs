@@ -399,7 +399,7 @@ mod test {
     // send off key events on separate thread
     thread::spawn(move || {
       for keys in inputs.iter() {
-        for key in keys.iter() { key_tx.send(*key).unwrap(); }
+        for key in keys.iter() { key_tx.unbounded_send(*key).unwrap(); }
         thread::sleep(Duration::from_millis(TIMEOUT + 10));
       }
     });
@@ -409,7 +409,7 @@ mod test {
       sleep(Duration::from_millis(1000)).then(|_| Err(()));
 
     // match up received commands with the expected output
-    let expected_output = futures::stream::iter(outputs.iter().map(Ok));
+    let expected_output = futures::stream::iter_result(outputs.iter().map(Ok));
     let check = cmd_rx.zip(expected_output).for_each(|(cmd, output)| {
         assert_eq!(cmd, *output);
         callback(cmd, &cmd_thread);

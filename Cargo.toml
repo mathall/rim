@@ -1,7 +1,7 @@
 [package]
 name = "rim"
 version = "0.1.0"
-authors = [ "Mathias Hällman <rim@mths.se>", "Julian Laubstein <contact@julianlaubstein.de>" ]
+authors = [ "Mathias Hällman <rim@mths.se>" ]
 
 [dependencies]
 bitflags = "*"

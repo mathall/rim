@@ -308,7 +308,7 @@ mod test {
     impl Drop for PipeKiller {
       fn drop(&mut self) {
         unsafe { libc::close(self.reader_fd); }
-        self.close_writer_tx.take().unwrap().complete(());
+        self.close_writer_tx.take().unwrap().send(()).unwrap();
       }
     }
     let _pipe_killer = PipeKiller {
@@ -341,7 +341,7 @@ mod test {
       sleep(Duration::from_millis(100)).then(|_| Err(()));
 
     // match up received keys with the expected output
-    let expected_output = futures::stream::iter(outputs.iter().map(Ok));
+    let expected_output = futures::stream::iter_result(outputs.iter().map(Ok));
     let check = key_rx.zip(expected_output).for_each(|(key, output)| {
         assert_eq!(key, *output);
         Ok(())
