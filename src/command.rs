@@ -70,7 +70,7 @@ impl Drop for CmdThread {
     self.kill_tx.take().expect("CmdThread already killed.").send(()).expect(
       "Command thread died prematurely.");
     self.died_rx.take().expect("CmdThread already killed.").wait().expect(
-      "Input thread died prematurely.");
+      "Command thread died prematurely.");
   }
 }
 
