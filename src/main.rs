@@ -623,7 +623,7 @@ fn main() {
 
   let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
   cmd_tx.unbounded_send(Cmd::ResetLayout).unwrap();
-  let filename = args.arg_file.unwrap_or("src/rim.rs".to_string());
+  let filename = args.arg_file.unwrap_or("src/main.rs".to_string());
   cmd_tx.unbounded_send(Cmd::WinCmd(WinCmd::OpenBuffer(
     PathBuf::from(&filename)))).unwrap();
   let cmd_thread = command::start(key_rx, cmd_tx);
@@ -838,7 +838,7 @@ fn default_normal_mode() -> command::Mode {
     Cmd::WinCmd(WinCmd::EnterReplaceMode(true)));
   // for testing purposes
   mode.keychain.bind(&[Key::Fn{num: 1, mods: KeyMod::MOD_NONE}],
-    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/rim.rs"))));
+    Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/main.rs"))));
   mode.keychain.bind(&[Key::Fn{num: 2, mods: KeyMod::MOD_NONE}],
     Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/buffer.rs"))));
   mode.keychain.bind(&[Key::Fn{num: 3, mods: KeyMod::MOD_NONE}],
