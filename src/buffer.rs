@@ -266,7 +266,7 @@ impl PageTree {
       match insert_mode {
         InsertMode::SetBranch  => *branch = Some(Box::new(Leaf(page))),
         InsertMode::UpdateTree => {
-          branch.as_mut().map(|mut boxed_node|
+          branch.as_mut().map(|boxed_node|
             match **boxed_node {
               Tree(ref mut tree) =>
                 tree.insert_page_at_offset(page, new_offset),

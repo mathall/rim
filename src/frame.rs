@@ -1127,7 +1127,7 @@ mod test {
   fn split_and_close() {
     let mut rng = rand::thread_rng();
     let select_window = |rng: &mut rand::ThreadRng, windows: &mut Vec<usize>| {
-      let selected = *rand::sample(rng, windows.iter(), 1)[0];
+      let selected = *rand::seq::sample_iter(rng, windows.iter(), 1).unwrap()[0];
       windows.retain(|&x| x != selected);
       return selected; };
     for descriptor_nr in 0..SPLIT_DESCRIPTORS.len() {
