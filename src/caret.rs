@@ -6,13 +6,11 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate unicode_width;
-
 use std::cmp;
 
-use self::unicode_width::UnicodeWidthChar as CharWidth;
+use unicode_width::UnicodeWidthChar as CharWidth;
 
-use buffer::Buffer;
+use crate::buffer::Buffer;
 
 /*
  * LineUp/Down: move caret a line up or down while trying to preserve the
@@ -190,7 +188,7 @@ impl Caret {
         } else {
             Some(desired_column)
         };
-        return (to_line, buffer_column, saved_column);
+        (to_line, buffer_column, saved_column)
     }
 }
 
@@ -227,7 +225,7 @@ pub fn screen_to_buffer_column(row: usize, screen_column: usize, buffer: &Buffer
 mod test {
     use std::path::Path;
 
-    use buffer::Buffer;
+    use crate::buffer::Buffer;
 
     use super::*;
 

@@ -6,24 +6,19 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate futures;
-extern crate tokio_core;
-extern crate tokio_timer;
-extern crate vec_map;
-
 use std::collections::{HashMap, VecDeque};
 use std::mem;
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use self::futures::sync::{mpsc, oneshot};
-use self::futures::{Future, Stream};
-use self::vec_map::VecMap;
+use futures::sync::{mpsc, oneshot};
+use futures::{Future, Stream};
+use vec_map::VecMap;
 
-use caret;
-use frame;
-use keymap::Key;
+use crate::caret;
+use crate::frame;
+use crate::keymap::Key;
 
 #[cfg(not(test))]
 const TIMEOUT: u64 = 3000;
@@ -63,7 +58,6 @@ impl CmdThread {
     fn send(&self, msg: Msg) {
         self.msg_tx
             .unbounded_send(msg)
-            .ok()
             .expect("command thread died");
     }
 }
@@ -103,7 +97,7 @@ pub fn start(
     CmdThread {
         kill_tx: Some(kill_tx),
         died_rx: Some(died_rx),
-        msg_tx: msg_tx,
+        msg_tx,
     }
 }
 
@@ -187,7 +181,7 @@ fn cmd_thread(
             }
 
             // work through the arrived keys
-            while keys.len() > 0 {
+            while !keys.is_empty() {
                 assert!(back_seq >= front_seq);
                 // determine amount of keys to consider
                 let num_keys = back_seq - front_seq;
@@ -200,8 +194,9 @@ fn cmd_thread(
                         .match_keys(&mut keys.iter().take(num_keys), drain);
                     // use the mode's fallback if the keychain didn't match anything
                     if match_result == MatchResult::None {
-                        (mode.fallback)(keys[0])
-                            .map(|cmd| match_result = MatchResult::Complete(cmd, 1));
+                        if let Some(cmd) = (mode.fallback)(keys[0]) {
+                            match_result = MatchResult::Complete(cmd, 1);
+                        }
                     }
                     // proceed to next mode only if no match was made
                     if match_result != MatchResult::None {
@@ -261,7 +256,7 @@ impl Mode {
         }
         Mode {
             keychain: Keychain::new(),
-            fallback: fallback,
+            fallback,
         }
     }
 }
@@ -299,14 +294,14 @@ impl Keychain {
         let new_self = match mem::replace(self, Keychain::new()) {
             Keychain::Node(mut map, opt_cmd) => match keys.split_first() {
                 None => {
-                    if map.len() > 0 {
+                    if !map.is_empty() {
                         Keychain::Node(map, Some(new_cmd))
                     } else {
                         Keychain::Cmd(new_cmd)
                     }
                 }
                 Some((key, ref keys)) => {
-                    let mut subchain = map.remove(&key).unwrap_or(Keychain::new());
+                    let mut subchain = map.remove(&key).unwrap_or_else(Keychain::new);
                     subchain.bind(keys, new_cmd);
                     map.insert(*key, subchain);
                     Keychain::Node(map, opt_cmd)
@@ -334,8 +329,8 @@ impl Keychain {
                 .unwrap_or(MatchResult::None)
         };
         match self {
-            &Keychain::Cmd(ref cmd) => MatchResult::Complete(cmd.clone(), 0),
-            &Keychain::Node(ref map, ref opt_cmd) => keys
+            Keychain::Cmd(ref cmd) => MatchResult::Complete(cmd.clone(), 0),
+            Keychain::Node(ref map, ref opt_cmd) => keys
                 .next()
                 .map(|key| {
                     map.get(key)
@@ -358,7 +353,7 @@ impl Keychain {
                     } else {
                         MatchResult::None
                     } {
-                        MatchResult::None if map.len() > 0 => MatchResult::Partial(0),
+                        MatchResult::None if !map.is_empty() => MatchResult::Partial(0),
                         otherwise => otherwise,
                     }
                 }),
@@ -421,17 +416,13 @@ pub enum WinCmd {
 
 #[cfg(test)]
 mod test {
-    extern crate futures;
-    extern crate tokio_timer;
-
     use std::thread;
     use std::time::Duration;
 
-    use self::futures::sync::mpsc;
-    use self::futures::{Future, Stream};
+    use futures::sync::mpsc;
+    use futures::{Future, Stream};
 
-    use frame;
-    use keymap::{Key, KeyMod};
+    use crate::keymap::{Key, KeyMod};
 
     use super::*;
 
@@ -440,8 +431,8 @@ mod test {
     // sleep inbetween to trigger a timeout.
     fn run_test<S, C>(inputs: Vec<Vec<Key>>, outputs: Vec<Cmd>, setup: S, callback: C)
     where
-        S: Fn(&CmdThread) -> (),
-        C: Fn(Cmd, &CmdThread) -> (),
+        S: Fn(&CmdThread),
+        C: Fn(Cmd, &CmdThread),
     {
         // set up communication channels
         let (key_tx, key_rx) = mpsc::unbounded();
@@ -484,7 +475,10 @@ mod test {
             .select(timeout)
             .wait()
             .ok()
-            .expect("Timeout waiting for command.");
+            .expect("Timeout waiting for command.")
+            .1
+            .wait()
+            .ok();
     }
 
     fn mode_0() -> Mode {
@@ -547,7 +541,7 @@ mod test {
             ],
             Cmd::CloseWindow,
         );
-        return mode;
+        mode
     }
 
     fn mode_1() -> Mode {
@@ -601,7 +595,7 @@ mod test {
             ],
             Cmd::MoveFocus(frame::Direction::Up),
         );
-        return mode;
+        mode
     }
 
     fn mode_2() -> Mode {
@@ -643,7 +637,7 @@ mod test {
             ],
             Cmd::CloseWindow,
         );
-        return mode;
+        mode
     }
 
     fn mode_3() -> Mode {
@@ -702,7 +696,7 @@ mod test {
             ],
             Cmd::MoveFocus(frame::Direction::Up),
         );
-        return mode;
+        mode
     }
 
     fn mode_4() -> Mode {
@@ -762,7 +756,7 @@ mod test {
             ],
             Cmd::CloseWindow,
         );
-        return mode;
+        mode
     }
 
     #[test]

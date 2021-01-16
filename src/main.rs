@@ -6,15 +6,9 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#[macro_use]
-extern crate bitflags;
-extern crate docopt;
-extern crate futures;
-extern crate serde;
 #[cfg(not(test))]
 #[macro_use]
 extern crate serde_derive;
-extern crate tokio_timer;
 
 mod buffer;
 mod caret;
@@ -79,7 +73,7 @@ impl Window {
             insert_mode: default_insert_mode(),
         };
         win.set_buf_id(INVALID_BUFFER_ID);
-        return win;
+        win
     }
 
     fn caret_for(&self, buf_id: BufferId) -> Option<&Caret> {
@@ -154,16 +148,16 @@ impl Rim {
         let first_win = Window::new();
         cmd_thread.set_mode(default_mode(), 0);
         cmd_thread.set_mode(first_win.normal_mode.clone(), 1);
-        windows.insert(first_win_id.clone(), first_win);
+        windows.insert(first_win_id, first_win);
         Rim {
-            frame: frame,
-            frame_ctx: frame_ctx,
+            frame,
+            frame_ctx,
             frame_needs_redraw: true,
-            windows: windows,
+            windows,
             focus: first_win_id,
             buffers: HashMap::new(),
             next_buf_id: INVALID_BUFFER_ID + 1,
-            cmd_thread: cmd_thread,
+            cmd_thread,
             quit: false,
         }
     }
@@ -181,7 +175,7 @@ impl Rim {
                 let id = self.next_buf_id;
                 self.next_buf_id += 1;
                 self.buffers.insert(id, buf);
-                return id;
+                id
             })
             .ok()
     }
@@ -202,20 +196,20 @@ impl Rim {
 
     fn set_focus(&mut self, win_id: frame::WindowId) {
         assert!(self.windows.contains_key(&win_id));
-        self.windows
-            .get(&win_id)
-            .map(|win| self.cmd_thread.set_mode(win.normal_mode.clone(), 1));
-        self.windows
-            .get_mut(&self.focus)
-            .map(|win| win.needs_redraw = true);
-        self.windows.remove(&win_id).map(|mut win| {
+        if let Some(win) = self.windows.get(&win_id) {
+            self.cmd_thread.set_mode(win.normal_mode.clone(), 1);
+        }
+        if let Some(win) = self.windows.get_mut(&self.focus) {
             win.needs_redraw = true;
-            self.buffers.get(&win.buf_id).map(|buffer| {
+        }
+        if let Some(mut win) = self.windows.remove(&win_id) {
+            win.needs_redraw = true;
+            if let Some(buffer) = self.buffers.get(&win.buf_id) {
                 let caret = *win.caret();
                 win.view_mut().scroll_into_view(caret, buffer)
-            });
-            self.windows.insert(win_id.clone(), win);
-        });
+            }
+            self.windows.insert(win_id, win);
+        }
         self.focus = win_id;
     }
 
@@ -226,12 +220,11 @@ impl Rim {
                 let win = self
                     .windows
                     .get(&self.focus)
-                    .map(|win| win.clone())
+                    .cloned()
                     .expect("Couldn't find focused window.");
                 self.windows.insert(new_win_id, win);
                 self.invalidate_frame();
             })
-            .ok()
             .expect("Failed to split window.");
     }
 
@@ -243,7 +236,6 @@ impl Rim {
                     self.invalidate_frame();
                 }
             })
-            .ok()
             .expect("Failed to resize window");
     }
 
@@ -251,7 +243,7 @@ impl Rim {
         self.frame
             .get_closest_neighbouring_window(&self.frame_ctx, &self.focus)
             .map(|neighbour| {
-                let old_focus = self.focus.clone();
+                let old_focus = self.focus;
                 self.set_focus(neighbour);
                 self.frame
                     .close_window(&mut self.frame_ctx, &old_focus)
@@ -283,11 +275,10 @@ impl Rim {
             .map(|(win_id, ref win)| {
                 let old_rect = win.rect;
                 (
-                    win_id.clone(),
+                    *win_id,
                     old_rect,
                     self.frame
                         .get_window_rect(&self.frame_ctx, win_id)
-                        .ok()
                         .expect("Couldn't find rect for window."),
                 )
             })
@@ -302,14 +293,14 @@ impl Rim {
                     let screen::Rect(_, new_size) = new_rect;
                     if old_size != new_size {
                         win.view_mut().set_size(new_size);
-                        self.buffers.get(&win.buf_id).map(|buffer| {
+                        if let Some(buffer) = self.buffers.get(&win.buf_id) {
                             let caret = *win.caret();
                             win.view_mut().scroll_into_view(caret, buffer)
-                        });
+                        }
                     }
                     win.rect = new_rect;
                     win.needs_redraw = true;
-                    self.windows.insert(win_id.clone(), win);
+                    self.windows.insert(*win_id, win);
                 })
                 .expect("Couldn't find window.");
         }
@@ -343,7 +334,7 @@ impl Rim {
                     .remove(&self.focus)
                     .map(|mut win| {
                         self.handle_win_cmd(cmd, &mut win);
-                        self.windows.insert(self.focus.clone(), win);
+                        self.windows.insert(self.focus, win);
                     })
                     .expect("Couldn't find focused window.");
             }
@@ -375,14 +366,15 @@ impl Rim {
             WinCmd::EnterNormalMode => {
                 self.set_win_cmd_mode(&win.normal_mode);
                 let id = win.buf_id;
-                self.buffers.remove(&id).map(|buffer| {
+                if let Some(buffer) = self.buffers.remove(&id) {
                     win.caret_mut().adjust(caret::Adjustment::Clamp, &buffer);
                     for (_, win) in self.windows.iter_mut() {
-                        win.caret_mut_for(id)
-                            .map(|caret| caret.adjust(caret::Adjustment::Clamp, &buffer));
+                        if let Some(caret) = win.caret_mut_for(id) {
+                            caret.adjust(caret::Adjustment::Clamp, &buffer);
+                        }
                     }
                     self.buffers.insert(id, buffer);
-                });
+                }
                 win.needs_redraw = true;
             }
             WinCmd::EnterReplaceMode(replace_line) => {
@@ -426,20 +418,20 @@ impl Rim {
                 self.set_win_cmd_mode(&win.insert_mode);
             }
             WinCmd::OpenBuffer(path) => {
-                self.load_buffer(path.as_path()).map(|buf_id| {
+                if let Some(buf_id) = self.load_buffer(path.as_path()) {
                     win.set_buf_id(buf_id);
                     let screen::Rect(_, size) = win.rect;
                     win.view_mut().set_size(size);
-                    self.buffers.get(&win.buf_id).map(|buffer| {
+                    if let Some(buffer) = self.buffers.get(&win.buf_id) {
                         let caret = *win.caret();
                         win.view_mut().scroll_into_view(caret, buffer)
-                    });
-                });
+                    }
+                }
             }
             WinCmd::SaveBuffer => {
-                self.buffers
-                    .get(&win.buf_id)
-                    .map(|buffer| buffer.write().ok().expect("Failed to save buffer."));
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
+                    buffer.write().expect("Failed to save buffer.");
+                }
             }
             WinCmd::Insert(string) => {
                 self.insert(string, win);
@@ -453,39 +445,39 @@ impl Rim {
                 self.move_caret(caret::Adjustment::CharPrev, win);
             }
             WinCmd::Backspace => {
-                let mut start = win.caret().clone();
-                self.buffers
-                    .get(&win.buf_id)
-                    .map(|buffer| start.adjust(caret::Adjustment::CharPrevFlat, buffer));
-                self.delete_range(start, win.caret().clone(), win);
+                let mut start = *win.caret();
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
+                    start.adjust(caret::Adjustment::CharPrevFlat, buffer);
+                }
+                self.delete_range(start, *win.caret(), win);
             }
             WinCmd::Delete => {
-                let mut end = win.caret().clone();
-                self.buffers
-                    .get(&win.buf_id)
-                    .map(|buffer| end.adjust(caret::Adjustment::CharNextFlat, buffer));
-                self.delete_range(win.caret().clone(), end, win);
+                let mut end = *win.caret();
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
+                    end.adjust(caret::Adjustment::CharNextFlat, buffer);
+                }
+                self.delete_range(*win.caret(), end, win);
             }
             WinCmd::BackspaceOnLine => {
-                let mut start = win.caret().clone();
-                self.buffers
-                    .get(&win.buf_id)
-                    .map(|buffer| start.adjust(caret::Adjustment::CharPrev, buffer));
-                self.delete_range(start, win.caret().clone(), win);
+                let mut start = *win.caret();
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
+                    start.adjust(caret::Adjustment::CharPrev, buffer);
+                }
+                self.delete_range(start, *win.caret(), win);
             }
             WinCmd::DeleteOnLine => {
-                let mut end = win.caret().clone();
-                self.buffers
-                    .get(&win.buf_id)
-                    .map(|buffer| end.adjust(caret::Adjustment::CharNextAppending, buffer));
-                self.delete_range(win.caret().clone(), end, win);
+                let mut end = *win.caret();
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
+                    end.adjust(caret::Adjustment::CharNextAppending, buffer);
+                }
+                self.delete_range(*win.caret(), end, win);
                 self.move_caret(caret::Adjustment::Clamp, win);
             }
             WinCmd::DeleteLine => {
-                let mut start = win.caret().clone();
-                let mut end = win.caret().clone();
+                let mut start = *win.caret();
+                let mut end = *win.caret();
                 let mut last_line = false;
-                self.buffers.get(&win.buf_id).map(|buffer| {
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
                     let line = win.caret().line();
                     let line_len = buffer.line_length(line).unwrap();
                     last_line = line + 1 == buffer.num_lines();
@@ -496,30 +488,30 @@ impl Rim {
                     } else {
                         start.adjust(caret::Adjustment::CharPrevFlat, buffer);
                     }
-                });
+                }
                 self.delete_range(start, end, win);
                 if last_line {
                     self.move_caret(caret::Adjustment::Set(win.caret().line(), 0), win);
                 }
             }
             WinCmd::DeleteRestOfLine => {
-                let mut end = win.caret().clone();
-                self.buffers.get(&win.buf_id).map(|buffer| {
+                let mut end = *win.caret();
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
                     let line = win.caret().line();
                     let line_len = buffer.line_length(line).unwrap();
                     end.adjust(caret::Adjustment::Set(line, line_len), buffer)
-                });
-                self.delete_range(win.caret().clone(), end, win);
+                }
+                self.delete_range(*win.caret(), end, win);
                 self.move_caret(caret::Adjustment::Clamp, win);
             }
             WinCmd::ChangeRestOfLine => {
-                let mut end = win.caret().clone();
-                self.buffers.get(&win.buf_id).map(|buffer| {
+                let mut end = *win.caret();
+                if let Some(buffer) = self.buffers.get(&win.buf_id) {
                     let line = win.caret().line();
                     let line_len = buffer.line_length(line).unwrap();
                     end.adjust(caret::Adjustment::Set(line, line_len), buffer)
-                });
-                self.delete_range(win.caret().clone(), end, win);
+                }
+                self.delete_range(*win.caret(), end, win);
                 self.set_win_cmd_mode(&win.insert_mode);
             }
         }
@@ -539,25 +531,25 @@ impl Rim {
     }
 
     fn move_caret(&mut self, adjustment: caret::Adjustment, win: &mut Window) {
-        self.buffers.get(&win.buf_id).map(|buffer| {
+        if let Some(buffer) = self.buffers.get(&win.buf_id) {
             win.caret_mut().adjust(adjustment, buffer);
             let caret = *win.caret();
             win.view_mut().scroll_into_view(caret, buffer);
-        });
+        }
         win.needs_redraw = true;
     }
 
     fn replace(&mut self, string: String, win: &mut Window) {
-        let mut end = win.caret().clone();
-        self.buffers
-            .get(&win.buf_id)
-            .map(|buffer| end.adjust(caret::Adjustment::CharNextAppending, buffer));
-        self.delete_range(win.caret().clone(), end, win);
+        let mut end = *win.caret();
+        if let Some(buffer) = self.buffers.get(&win.buf_id) {
+            end.adjust(caret::Adjustment::CharNextAppending, buffer);
+        }
+        self.delete_range(*win.caret(), end, win);
         self.insert(string, win);
     }
 
     fn insert(&mut self, string: String, win: &mut Window) {
-        self.buffers.remove(&win.buf_id).map(|mut buffer| {
+        if let Some(mut buffer) = self.buffers.remove(&win.buf_id) {
             let (insert_line, insert_col) = (win.caret().line(), win.caret().column());
             // update windows displaying the buffer, character by character
             let (mut c_line, mut c_col) = (insert_line, insert_col);
@@ -615,18 +607,17 @@ impl Rim {
             // insert string into buffer
             buffer
                 .insert_at_line_column(string, insert_line, insert_col)
-                .ok()
                 .expect("View had invalid caret.");
             // ensure the caret is in the view
             let caret = *win.caret();
             win.view_mut().scroll_into_view(caret, &buffer);
             win.needs_redraw = true;
             self.buffers.insert(win.buf_id, buffer);
-        });
+        }
     }
 
     fn delete_range(&mut self, start: Caret, end: Caret, win: &mut Window) {
-        self.buffers.remove(&win.buf_id).map(|mut buffer| {
+        if let Some(mut buffer) = self.buffers.remove(&win.buf_id) {
             let (start_line, start_col) = (start.line(), start.column());
             let (end_line, end_col) = (end.line(), end.column());
             if buffer
@@ -668,18 +659,16 @@ impl Rim {
                         } else {
                             cur_col - end_col + start_col
                         }
-                    } else {
-                        if cur_line == start_line {
-                            if cur_col < start_col {
-                                cur_col
-                            } else {
-                                clamped_start_col
-                            }
-                        } else if cur_line == end_line && cur_col >= end_col {
-                            cur_col - end_col + start_col
+                    } else if cur_line == start_line {
+                        if cur_col < start_col {
+                            cur_col
                         } else {
-                            0
+                            clamped_start_col
                         }
+                    } else if cur_line == end_line && cur_col >= end_col {
+                        cur_col - end_col + start_col
+                    } else {
+                        0
                     };
                     let new_line = if cur_line >= start_line && cur_line <= end_line {
                         start_line
@@ -701,12 +690,12 @@ impl Rim {
                 win.needs_redraw = true;
             }
             self.buffers.insert(win.buf_id, buffer);
-        });
+        }
     }
 }
 
 #[cfg(not(test))]
-const USAGE: &'static str = "
+const USAGE: &str = "
 Rim - Vim-style text editor.
 
 Usage:
@@ -752,7 +741,7 @@ fn main() {
 
     let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
     cmd_tx.unbounded_send(Cmd::ResetLayout).unwrap();
-    let filename = args.arg_file.unwrap_or("src/main.rs".to_string());
+    let filename = args.arg_file.unwrap_or_else(|| "src/main.rs".to_string());
     cmd_tx
         .unbounded_send(Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from(&filename))))
         .unwrap();
@@ -1121,7 +1110,7 @@ fn default_mode() -> command::Mode {
         ],
         Cmd::WinCmd(WinCmd::SaveBuffer),
     );
-    return mode;
+    mode
 }
 
 #[cfg(not(test))]
@@ -1385,7 +1374,7 @@ fn default_normal_mode() -> command::Mode {
         }],
         Cmd::WinCmd(WinCmd::OpenBuffer(PathBuf::from("src/frame.rs"))),
     );
-    return mode;
+    mode
 }
 
 #[cfg(not(test))]
@@ -1434,7 +1423,7 @@ fn default_insert_mode() -> command::Mode {
         key_to_string(key).map(|string| Cmd::WinCmd(WinCmd::Insert(string)))
     }
     mode.fallback = fallback;
-    return mode;
+    mode
 }
 
 #[cfg(not(test))]
@@ -1455,5 +1444,5 @@ fn replace_mode(replace_line: bool) -> command::Mode {
     } else {
         replace_fallback
     };
-    return mode;
+    mode
 }

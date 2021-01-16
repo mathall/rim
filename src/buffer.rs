@@ -7,7 +7,6 @@
  */
 
 use std::cmp;
-use std::error;
 use std::fmt;
 use std::fs::File;
 use std::io;
@@ -115,7 +114,7 @@ impl PageTree {
         for page in stream.by_ref() {
             tree.append_page(page);
         }
-        return stream.error.map_or(Ok(tree), |err| Err(err));
+        stream.error.map_or(Ok(tree), Err)
     }
 
     // See comment for offset_of_line_start and add to that quirk the requirement
@@ -217,35 +216,32 @@ impl PageTree {
 
             // split the page if it got too big
             if split_page {
-                branch
-                    .as_mut()
-                    .or_else(|| unreachable!())
-                    .map(|boxed_node| {
-                        let node = mem::replace(&mut **boxed_node, Tree(PageTree::new()));
-                        **boxed_node = if let Leaf(page) = node {
-                            let (page, next_page) = page.split();
-                            assert!(page.data.len() <= MAX_PAGE_SIZE);
-                            assert!(next_page.data.len() <= MAX_PAGE_SIZE);
-                            // avoid splitting the leaf if there's place in the other branch
-                            if other.is_none() {
-                                let (page, other_page) = if go_left {
-                                    (page, next_page)
-                                } else {
-                                    (next_page, page)
-                                };
-                                *other = Some(Box::new(Leaf(other_page)));
-                                Leaf(page)
+                if let Some(boxed_node) = branch.as_mut().or_else(|| unreachable!()) {
+                    let node = mem::replace(&mut **boxed_node, Tree(PageTree::new()));
+                    **boxed_node = if let Leaf(page) = node {
+                        let (page, next_page) = page.split();
+                        assert!(page.data.len() <= MAX_PAGE_SIZE);
+                        assert!(next_page.data.len() <= MAX_PAGE_SIZE);
+                        // avoid splitting the leaf if there's place in the other branch
+                        if other.is_none() {
+                            let (page, other_page) = if go_left {
+                                (page, next_page)
                             } else {
-                                let mut new_subtree = PageTree::new();
-                                let right_offset = page.length;
-                                new_subtree.insert_page_at_offset(page, 0);
-                                new_subtree.insert_page_at_offset(next_page, right_offset);
-                                Tree(new_subtree)
-                            }
+                                (next_page, page)
+                            };
+                            *other = Some(Box::new(Leaf(other_page)));
+                            Leaf(page)
                         } else {
-                            unreachable!();
-                        };
-                    });
+                            let mut new_subtree = PageTree::new();
+                            let right_offset = page.length;
+                            new_subtree.insert_page_at_offset(page, 0);
+                            new_subtree.insert_page_at_offset(next_page, right_offset);
+                            Tree(new_subtree)
+                        }
+                    } else {
+                        unreachable!();
+                    };
+                }
             }
         }
         self.update_caches();
@@ -376,7 +372,7 @@ impl PageTree {
         }
         self.update_caches();
         self.ensure_balanced();
-        return deleted;
+        deleted
     }
 
     // There are two cases when the branches' heights can differ by too much:
@@ -425,8 +421,8 @@ impl PageTree {
             } else {
                 &mut self.right
             } {
-                &mut None => unreachable!(),
-                &mut Some(ref mut boxed_node) => {
+                None => unreachable!(),
+                Some(ref mut boxed_node) => {
                     match **boxed_node {
                         Leaf(_) => unreachable!(),
                         Tree(ref mut mid) => {
@@ -438,13 +434,13 @@ impl PageTree {
                             } else {
                                 &mut mid.right
                             } {
-                                &mut None => unreachable!(),
-                                &mut Some(ref mut boxed_node) => {
+                                None => unreachable!(),
+                                Some(ref mut boxed_node) => {
                                     match **boxed_node {
                                         Leaf(_) => unreachable!(),
                                         Tree(ref mut low) => {
-                                            // stash the branches of the lower subtree in appropriate
-                                            // order
+                                            // stash the branches of the lower subtree in
+                                            // appropriate order
                                             let (left, right) = match (first_go_left, then_go_left)
                                             {
                                                 (false, false) => (&mut t2, &mut t3),
@@ -500,30 +496,24 @@ impl PageTree {
             mem::swap(&mut self.right, &mut low_tree);
 
             // place t0-t3 into the left and right tree in appropriate order
-            self.left
-                .as_mut()
-                .or_else(|| unreachable!())
-                .map(|boxed_tree_node| {
-                    if let Tree(ref mut left) = **boxed_tree_node {
-                        mem::swap(&mut left.left, &mut t0);
-                        mem::swap(&mut left.right, &mut t1);
-                        left.update_caches();
-                    } else {
-                        unreachable!()
-                    }
-                });
-            self.right
-                .as_mut()
-                .or_else(|| unreachable!())
-                .map(|boxed_tree_node| {
-                    if let Tree(ref mut right) = **boxed_tree_node {
-                        mem::swap(&mut right.left, &mut t2);
-                        mem::swap(&mut right.right, &mut t3);
-                        right.update_caches();
-                    } else {
-                        unreachable!()
-                    }
-                });
+            if let Some(boxed_tree_node) = self.left.as_mut().or_else(|| unreachable!()) {
+                if let Tree(ref mut left) = **boxed_tree_node {
+                    mem::swap(&mut left.left, &mut t0);
+                    mem::swap(&mut left.right, &mut t1);
+                    left.update_caches();
+                } else {
+                    unreachable!()
+                }
+            }
+            if let Some(boxed_tree_node) = self.right.as_mut().or_else(|| unreachable!()) {
+                if let Tree(ref mut right) = **boxed_tree_node {
+                    mem::swap(&mut right.left, &mut t2);
+                    mem::swap(&mut right.right, &mut t3);
+                    right.update_caches();
+                } else {
+                    unreachable!()
+                }
+            }
             self.update_caches();
         }
     }
@@ -554,20 +544,20 @@ impl PageTree {
     fn decide_branch_by_offset(&self, offset: usize) -> (bool, usize) {
         let left_length = self.left.length();
         let go_left = left_length == 0 || offset < left_length;
-        return (
+        (
             go_left,
             if go_left {
                 offset
             } else {
                 offset - left_length
             },
-        );
+        )
     }
 
     fn decide_branch_by_line(&self, line: usize) -> (bool, usize) {
         let left_newlines = self.left.newlines();
         let go_left = line <= left_newlines;
-        return (go_left, if go_left { line } else { line - left_newlines });
+        (go_left, if go_left { line } else { line - left_newlines })
     }
 
     fn iter(&self) -> PageTreeIterator {
@@ -586,7 +576,7 @@ struct PageTreeIterator<'l> {
 impl<'l> PageTreeIterator<'l> {
     fn new(tree: &'l PageTree, start_offset: usize) -> PageTreeIterator<'l> {
         PageTreeIterator {
-            tree: tree,
+            tree,
             next_offset: start_offset,
         }
     }
@@ -626,7 +616,7 @@ impl<'l> CharIterator<'l> {
         }
         CharIterator {
             counter: end - start,
-            pages: pages,
+            pages,
             chars: Some(chars),
         }
     }
@@ -662,10 +652,7 @@ pub struct LineIterator<'l> {
 
 impl<'l> LineIterator<'l> {
     fn new(tree: &'l PageTree) -> LineIterator {
-        LineIterator {
-            tree: tree,
-            next_line: 0,
-        }
+        LineIterator { tree, next_line: 0 }
     }
 
     pub fn from(mut self, line: usize) -> LineIterator<'l> {
@@ -710,12 +697,12 @@ impl Page {
     fn new(data: String) -> Page {
         assert!(data.len() <= MAX_PAGE_SIZE);
         let mut page = Page {
-            data: data,
+            data,
             length: 0,
             newline_offsets: Vec::new(),
         };
         page.update_caches();
-        return page;
+        page
     }
 
     fn byte_offset(&self, offset: usize) -> usize {
@@ -764,8 +751,8 @@ impl Page {
             // before truncating, shift down the string's ending if anything is left
             if end < self.data.len() {
                 ptr::copy(
-                    self.data.as_bytes().as_ptr().offset(end as isize),
-                    self.data.as_mut_vec().as_mut_ptr().offset(start as isize),
+                    self.data.as_bytes().as_ptr().add(end),
+                    self.data.as_mut_vec().as_mut_ptr().add(start),
                     self.data.len() - end,
                 );
             }
@@ -773,23 +760,21 @@ impl Page {
             self.data.as_mut_vec().truncate(new_len);
         }
         self.update_caches();
-        return deleted;
+        deleted
     }
 
     fn update_caches(&mut self) {
         self.length = self.data.chars().count();
         self.newline_offsets.clear();
-        let mut offset = 0;
-        for character in self.data.chars() {
+        for (offset, character) in self.data.chars().enumerate() {
             if character == '\n' {
                 self.newline_offsets.push(offset);
             }
-            offset += 1;
         }
     }
 
     fn offset_of_newline(&self, newline: usize) -> Option<usize> {
-        self.newline_offsets.get(newline).map(|&offset| offset)
+        self.newline_offsets.get(newline).copied()
     }
 
     fn split(mut self) -> (Page, Page) {
@@ -803,7 +788,7 @@ impl Page {
             .expect("Split should have got a second chunk.");
         assert!(chunker.next().is_none());
         self.update_caches();
-        return (self, Page::new(rest));
+        (self, Page::new(rest))
     }
 }
 
@@ -820,7 +805,7 @@ impl StringChunkerator {
     fn new(string: String, chunk_size: usize) -> StringChunkerator {
         StringChunkerator {
             data: string.into_bytes(),
-            chunk_size: chunk_size,
+            chunk_size,
         }
     }
 }
@@ -830,9 +815,9 @@ impl Iterator for StringChunkerator {
 
     fn next(&mut self) -> Option<Self::Item> {
         // cut out a chunk of |self.chunk_size| bytes and hope it's a valid string
-        let mut chunk: Vec<u8> = self.data.iter().take(self.chunk_size).map(|&b| b).collect();
-        self.data = self.data.iter().skip(self.chunk_size).map(|&b| b).collect();
-        while self.data.len() > 0 || chunk.len() > 0 {
+        let mut chunk: Vec<u8> = self.data.iter().take(self.chunk_size).copied().collect();
+        self.data = self.data.iter().skip(self.chunk_size).copied().collect();
+        while !self.data.is_empty() || !chunk.is_empty() {
             chunk = match String::from_utf8(chunk) {
                 Ok(good_chunk) => return Some(good_chunk),
                 Err(err) => {
@@ -846,7 +831,7 @@ impl Iterator for StringChunkerator {
                 }
             }
         }
-        return None;
+        None
     }
 }
 
@@ -861,11 +846,9 @@ struct PageStream {
 
 impl PageStream {
     fn new(path: &Path) -> io::Result<PageStream> {
-        File::open(path).and_then(|f| {
-            Ok(PageStream {
-                file: f,
-                error: None,
-            })
+        File::open(path).map(|f| PageStream {
+            file: f,
+            error: None,
         })
     }
 
@@ -876,12 +859,12 @@ impl PageStream {
         let mut num_truncated_bytes = 0;
         // adjust for multi-byte code-points spanning page boundaries
         let replacement_char = '\u{FFFD}';
-        if string.chars().last() == Some(replacement_char) {
+        if string.ends_with(replacement_char) {
             let string_len = string.len();
             string.truncate(string_len - replacement_char.len_utf8());
             num_truncated_bytes = data.len() - string.len();
         }
-        return (string, num_truncated_bytes);
+        (string, num_truncated_bytes)
     }
 }
 
@@ -900,9 +883,8 @@ impl Iterator for PageStream {
                 } else {
                     let (string, num_truncated_bytes) =
                         PageStream::raw_data_to_utf8_string(&(*data)[0..bytes]);
-                    try!(self
-                        .file
-                        .seek(SeekFrom::Current(-(num_truncated_bytes as i64))));
+                    self.file
+                        .seek(SeekFrom::Current(-(num_truncated_bytes as i64)))?;
                     Ok(Some(Page::new(string)))
                 }
             })
@@ -928,16 +910,6 @@ impl fmt::Display for Error {
     }
 }
 
-impl error::Error for Error {
-    fn description(&self) -> &str {
-        match *self {
-            Error::IoError(ref err) => error::Error::description(err),
-            Error::NoPath => "The buffer had no path.",
-            Error::BadLocation => "The line/column or offset did not specify a valid location",
-        }
-    }
-}
-
 pub type Result<T> = result::Result<T, Error>;
 
 /*
@@ -956,23 +928,21 @@ impl Buffer {
             tree: PageTree::new(),
         };
         buffer.insert_at_offset("\n".to_string(), 0);
-        return buffer;
+        buffer
     }
 
     pub fn open(path: &Path) -> Result<Buffer> {
         PageStream::new(path)
             .and_then(PageTree::build)
-            .and_then(|tree| {
-                Ok(Buffer {
-                    path: Some(path.to_path_buf()),
-                    tree: tree,
-                })
+            .map(|tree| Buffer {
+                path: Some(path.to_path_buf()),
+                tree,
             })
             .map(|mut buffer| {
                 buffer.ensure_ends_with_newline();
                 buffer
             })
-            .map_err(|io_err| Error::IoError(io_err))
+            .map_err(Error::IoError)
     }
 
     fn ensure_ends_with_newline(&mut self) {
@@ -1005,15 +975,12 @@ impl Buffer {
                         |ok, err| if ok.is_ok() && err.is_err() { err } else { ok },
                     )
             })
-            .map_err(|io_err| Error::IoError(io_err))
+            .map_err(Error::IoError)
     }
 
     #[cfg(not(test))]
     pub fn path(&self) -> Result<&Path> {
-        self.path
-            .as_ref()
-            .map(|path| path.as_path())
-            .ok_or(Error::NoPath)
+        self.path.as_deref().ok_or(Error::NoPath)
     }
 
     pub fn insert_at_line_column(
@@ -1112,13 +1079,11 @@ mod test {
     // Opens a buffer (new or loaded file), performs some operation on it,
     // dumps buffer content to disk, compares results to expectations.
     // Also throws in a balance check on the resulting page tree, because why not.
-    fn buffer_test<O, M: ?Sized>(test: &String, operation: O, make_buffer: Box<M>)
+    fn buffer_test<O, M: ?Sized>(test: &str, operation: O, make_buffer: Box<M>)
     where
-        O: Fn(&mut Buffer) -> (),
+        O: Fn(&mut Buffer),
         M: Fn() -> Result<Buffer>,
     {
-        use std::error::Error;
-        use std::io::Read;
         let result_path_string = format!("tests/buffer/{}-result.txt", test);
         let result_path = Path::new(&result_path_string);
         let expect_path_string = format!("tests/buffer/{}-expect.txt", test);
@@ -1138,7 +1103,7 @@ mod test {
         let file_contents = |path| {
             File::open(path).and_then(|mut file| {
                 let mut content = String::new();
-                try!(file.read_to_string(&mut content));
+                file.read_to_string(&mut content)?;
                 Ok(content)
             })
         };
@@ -1147,9 +1112,9 @@ mod test {
         let expect_content = file_contents(&expect_path);
 
         match (result_content, result, expect_content) {
-            (Err(e), _, _) => panic!("{}", Error::description(&e)),
-            (_, Err(e), _) => panic!("{}", Error::description(&e)),
-            (_, _, Err(e)) => panic!("{}", Error::description(&e)),
+            (Err(e), _, _) => panic!("{}", e),
+            (_, Err(e), _) => panic!("{}", e),
+            (_, _, Err(e)) => panic!("{}", e),
             (Ok(result), Ok(_), Ok(expect)) => assert_eq!(result, expect),
         };
     }
@@ -1164,7 +1129,7 @@ mod test {
             #[test]
             fn $name() {
                 let test = stringify!($name).to_string();
-                let buffer_maker: Box<Fn() -> Result<Buffer>> = if $new_file {
+                let buffer_maker: Box<dyn Fn() -> Result<Buffer>> = if $new_file {
                     Box::new(|| Ok(Buffer::new()))
                 } else {
                     Box::new(|| {
@@ -1241,9 +1206,7 @@ mod test {
         } else {
             right_height - left_height
         };
-        return height_diff < 2
-            && branch_is_balanced(&tree.left)
-            && branch_is_balanced(&tree.right);
+        height_diff < 2 && branch_is_balanced(&tree.left) && branch_is_balanced(&tree.right)
     }
 
     buffer_test!(existing_file_insert, false, existing_file_insert_operation);
@@ -1351,8 +1314,8 @@ mod test {
     fn line_length_test(path: &Path, expect: &[usize]) {
         let buffer = Buffer::open(path).unwrap();
         assert_eq!(buffer.num_lines(), expect.len());
-        for line in 0..buffer.num_lines() {
-            assert_eq!(buffer.line_length(line).unwrap(), expect[line]);
+        for (line, expectation) in expect.iter().enumerate().take(buffer.num_lines()) {
+            assert_eq!(buffer.line_length(line).unwrap(), *expectation);
         }
     }
 

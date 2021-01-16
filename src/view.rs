@@ -6,18 +6,16 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate unicode_width;
-
 use std::cmp;
 
-use self::unicode_width::UnicodeWidthChar as CharWidth;
+use unicode_width::UnicodeWidthChar as CharWidth;
 
-use buffer::Buffer;
-use caret;
-use caret::Caret;
-use screen;
+use crate::buffer::Buffer;
+use crate::caret;
+use crate::caret::Caret;
+use crate::screen;
 #[cfg(not(test))]
-use screen::Screen;
+use crate::screen::Screen;
 
 const MIN_VIEW_SIZE: u16 = 1;
 
@@ -81,7 +79,7 @@ impl View {
         let end = start
             + buffer
                 .get_char_by_line_column(line, column)
-                .and_then(|c| CharWidth::width(c))
+                .and_then(CharWidth::width)
                 .unwrap_or(1)
             - 1;
         self.scroll_column = if start < self.scroll_column {
@@ -186,10 +184,8 @@ impl View {
 mod test {
     use std::path::Path;
 
-    use buffer::Buffer;
-    use caret;
-    use caret::Caret;
-    use screen;
+    use crate::buffer::Buffer;
+    use crate::caret::Caret;
 
     use super::*;
 

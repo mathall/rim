@@ -100,7 +100,7 @@ pub enum KeySym {
     NSyms,
 }
 
-bitflags! {
+bitflags::bitflags! {
     pub struct KeyMod: u8 {
         const MOD_NONE  = 0;
         const MOD_SHIFT = 1 << 0;

@@ -2,6 +2,7 @@
 name = "rim"
 version = "0.1.0"
 authors = [ "Mathias Hällman <rim@mths.se>" ]
+edition = "2018"
 
 [dependencies]
 bitflags = "*"

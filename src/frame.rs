@@ -6,17 +6,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate uuid;
-
 use std::cmp;
 use std::collections::{vec_deque, HashMap, VecDeque};
 use std::error;
 use std::fmt;
 use std::result;
 
-use screen;
+use crate::screen;
 #[cfg(not(test))]
-use screen::Screen;
+use crate::screen::Screen;
 
 use self::Orientation::*;
 use self::SectionSide::*;
@@ -68,7 +66,7 @@ impl SectionPath {
 
     fn first(&self) -> Option<SectionSide> {
         let &SectionPath(ref internals) = self;
-        internals.front().map(|&side| side)
+        internals.front().copied()
     }
 
     fn common_base(&self, other: &SectionPath) -> SectionPath {
@@ -85,7 +83,7 @@ impl SectionPath {
     }
 
     fn does_prefix(&self, other: &SectionPath) -> bool {
-        return self.common_base(other) == *self;
+        self.common_base(other) == *self
     }
 
     fn iter(&self) -> vec_deque::Iter<SectionSide> {
@@ -135,7 +133,7 @@ impl SectionSplit {
         SectionSplit {
             fst: Box::new(Section::new()),
             snd: Box::new(Section::new()),
-            orientation: orientation,
+            orientation,
         }
     }
 }
@@ -216,7 +214,7 @@ impl Section {
     // Redistributes available size along one orientation in a top down fashion.
     fn reset_sizes_along(&mut self, orientation: Orientation) {
         let screen::Size(rows, cols) = self.size;
-        self.split.as_mut().map(|ref mut split| {
+        if let Some(ref mut split) = self.split.as_mut() {
             let self_size = if orientation == Vertical { rows } else { cols };
 
             // set size of immediate subsections
@@ -245,7 +243,7 @@ impl Section {
             // reset recursively
             split.fst.reset_sizes_along(orientation);
             split.snd.reset_sizes_along(orientation);
-        });
+        }
     }
 
     fn num_splits_along_at<'l, It>(&self, orientation: Orientation, path: &mut It) -> u16
@@ -333,7 +331,7 @@ impl Section {
                         };
                         (new_path, align_orientation, !new_base)
                     })
-                    .or(Some((SectionPath::new(), split.orientation, false)))
+                    .or_else(|| Some((SectionPath::new(), split.orientation, false)))
             })
         })
     }
@@ -503,12 +501,10 @@ impl Section {
             {
                 if (side == Fst && amount < 0) || (side == Snd && amount > 0) {
                     amount
+                } else if amount > 0 {
+                    cmp::min(amount, size - MIN_SECTION_SIZE as isize)
                 } else {
-                    if amount > 0 {
-                        cmp::min(amount, size - MIN_SECTION_SIZE as isize)
-                    } else {
-                        cmp::max(amount, MIN_SECTION_SIZE as isize - size)
-                    }
+                    cmp::max(amount, MIN_SECTION_SIZE as isize - size)
                 }
             }
             Some(ref mut split) => {
@@ -563,7 +559,7 @@ impl Section {
 
     #[cfg(not(test))]
     fn draw_borders(&self, position: screen::Cell, screen: &mut Screen) {
-        self.split.as_ref().map(|ref split| {
+        if let Some(split) = self.split.as_ref() {
             split.fst.draw_borders(position, screen);
             split.snd.draw_borders(
                 snd_position(position, split.fst.size, split.orientation),
@@ -577,7 +573,7 @@ impl Section {
                 let border_color = screen::Color::Cyan;
                 screen.put(screen_cell, border_char, border_color, border_color);
             }
-        });
+        }
     }
 }
 
@@ -606,12 +602,12 @@ fn snd_position(
     orientation: Orientation,
 ) -> screen::Cell {
     let screen::Size(fst_rows, fst_cols) = fst_size;
-    return fst_position
+    fst_position
         + if orientation == Vertical {
             screen::Cell(0, fst_cols + BORDER_SIZE)
         } else {
             screen::Cell(fst_rows + BORDER_SIZE, 0)
-        };
+        }
 }
 
 /*
@@ -627,15 +623,15 @@ struct LeafSectionIterator<'l> {
 impl<'l> LeafSectionIterator<'l> {
     fn new(main_section: &'l Section, side: SectionSide) -> LeafSectionIterator<'l> {
         LeafSectionIterator {
-            main_section: main_section,
-            side: side,
+            main_section,
+            side,
             next: Some(main_section.get_leaf(if side == Fst { Snd } else { Fst })),
         }
     }
 
     // Starts the iterator from a given, already explored, path.
     fn from(mut self, path: SectionPath) -> LeafSectionIterator<'l> {
-        self.next = self.find_next(path.clone());
+        self.next = self.find_next(path);
         self
     }
 
@@ -671,7 +667,7 @@ impl<'l> Iterator for LeafSectionIterator<'l> {
             .next
             .as_ref()
             .and_then(|last| self.find_next(last.clone()));
-        return ret;
+        ret
     }
 }
 
@@ -745,11 +741,11 @@ impl FrameContext {
     fn add_section_path(&mut self, path: SectionPath) -> WindowId {
         let window = uuid::Uuid::new_v4();
         self.set_section_path(&window, path);
-        return window;
+        window
     }
 
     fn set_section_path(&mut self, window: &WindowId, path: SectionPath) {
-        self.window_to_section_path.insert(window.clone(), path);
+        self.window_to_section_path.insert(*window, path);
     }
 
     fn get_section_path(&self, window: &WindowId) -> Result<&SectionPath> {
@@ -762,7 +758,7 @@ impl FrameContext {
         self.window_to_section_path
             .iter()
             .find(|&(_, val)| *val == *path)
-            .map(|(key, _)| key.clone())
+            .map(|(key, _)| *key)
             .expect("Tried to get WindowId of unexisting window.")
     }
 }
@@ -829,7 +825,7 @@ impl Frame {
                 // reset layout and update the context with the two new sections
                 self.main_section.reset_sizes_along(orientation.opposite());
                 ctx.set_section_path(window, fst);
-                return ctx.add_section_path(snd);
+                ctx.add_section_path(snd)
             })
     }
 
@@ -1085,7 +1081,7 @@ impl Frame {
                     .main_section
                     .shift_split(&mut base_path.iter(), adjusted_amount);
                 let adjusted_shifted = if side == Snd { shifted } else { -shifted };
-                (adjusted_shifted, base_path.clone())
+                (adjusted_shifted, base_path)
             })
     }
 
@@ -1142,12 +1138,7 @@ fn adjacent_window_point(rect: screen::Rect, direction: Direction) -> Option<scr
  */
 #[cfg(test)]
 mod test {
-    extern crate rand;
-    extern crate vec_map;
-
-    use self::vec_map::VecMap;
-
-    use screen;
+    use vec_map::VecMap;
 
     use super::*;
 
@@ -1219,10 +1210,14 @@ mod test {
                 if orientation == split.orientation {
                     let fst_splits = split.fst.num_splits_along(orientation);
                     let snd_splits = split.snd.num_splits_along(orientation);
-                    if fst_splits > snd_splits {
-                        return all_minimized_along(&*split.fst, orientation);
-                    } else if snd_splits > fst_splits {
-                        return all_minimized_along(&*split.snd, orientation);
+                    match fst_splits.cmp(&snd_splits) {
+                        std::cmp::Ordering::Greater => {
+                            return all_minimized_along(&*split.fst, orientation)
+                        }
+                        std::cmp::Ordering::Less => {
+                            return all_minimized_along(&*split.snd, orientation)
+                        }
+                        std::cmp::Ordering::Equal => (),
                     }
                 }
 
@@ -1239,11 +1234,8 @@ mod test {
         use std::collections::HashSet;
         let actual_leafs: HashSet<SectionPath> =
             LeafSectionIterator::new(&frame.main_section, Snd).collect();
-        let leafs_in_context: HashSet<SectionPath> = ctx
-            .window_to_section_path
-            .values()
-            .map(|v| v.clone())
-            .collect();
+        let leafs_in_context: HashSet<SectionPath> =
+            ctx.window_to_section_path.values().cloned().collect();
         assert_eq!(actual_leafs, leafs_in_context);
         assert_eq!(leafs_in_context.len(), ctx.window_to_section_path.len());
     }
@@ -1253,7 +1245,7 @@ mod test {
     // Starting with one window and assigning it the number 0 then splitting
     // sequentially and assigning each new window the next number results in the
     // frames and section trees depicted along with the split descriptors below.
-    const SPLIT_DESCRIPTORS: &'static [&'static [(usize, Orientation)]] = &[
+    const SPLIT_DESCRIPTORS: &[&[(usize, Orientation)]] = &[
         // -----------------                     V
         // |     0     |   |                    / \
         // |-----------|   |                   H   1
@@ -1330,7 +1322,7 @@ mod test {
             check_frame_invariants(&frame, &ctx);
         }
 
-        return (frame, ctx, windows);
+        (frame, ctx, windows)
     }
 
     // Tear down frames in random window order, checking invariants along the way.
@@ -1340,11 +1332,11 @@ mod test {
         let select_window = |rng: &mut rand::ThreadRng, windows: &mut Vec<usize>| {
             let selected = *rand::seq::sample_iter(rng, windows.iter(), 1).unwrap()[0];
             windows.retain(|&x| x != selected);
-            return selected;
+            selected
         };
-        for descriptor_nr in 0..SPLIT_DESCRIPTORS.len() {
-            let num_windows = SPLIT_DESCRIPTORS[descriptor_nr].len() + 1;
+        for (descriptor_nr, descriptor) in SPLIT_DESCRIPTORS.iter().enumerate() {
             for _ in 0..100 {
+                let num_windows = descriptor.len() + 1;
                 let mut window_nrs: Vec<usize> = (0..num_windows).collect();
                 let (mut frame, mut ctx, windows) = setup_frame(descriptor_nr);
                 let close_last = select_window(&mut rng, &mut window_nrs);
@@ -1639,15 +1631,15 @@ mod test {
     fn do_window_resize(
         frame: &mut Frame,
         ctx: &FrameContext,
-        windows: &Vec<WindowId>,
+        windows: &[WindowId],
         window_changes: &VecMap<i16>,
         (win, orientation, amount): (usize, Orientation, isize),
     ) {
         // calculate and collect expected sizes after resizing a window
         let expectations: Vec<(WindowId, screen::Size)> = (0..windows.len())
             .map(|win| {
-                let window = windows[win].clone();
-                let change = window_changes.get(win).map(|&x| x).unwrap_or(0);
+                let window = windows[win];
+                let change = window_changes.get(win).copied().unwrap_or(0);
                 let screen::Rect(_, screen::Size(rows, cols)) =
                     frame.get_window_rect(ctx, &window).unwrap();
                 (
@@ -1767,8 +1759,8 @@ mod test {
     fn try_window_sequence(frame_num: usize, sequence: &[usize]) {
         let (frame, ctx, windows) = setup_frame(frame_num);
 
-        let first_window = windows[sequence[0]].clone();
-        let last_window = windows[sequence[sequence.len() - 1]].clone();
+        let first_window = windows[sequence[0]];
+        let last_window = windows[sequence[sequence.len() - 1]];
 
         assert_eq!(
             Err(Error::NoSuchSequentWindow),
@@ -1882,21 +1874,18 @@ mod test {
         );
     }
 
+    type WinIdx = usize;
+    type OptWinIdx = Option<WinIdx>;
+
     fn try_adjacent_windows(
         frame: &Frame,
         ctx: &FrameContext,
-        windows: &Vec<WindowId>,
-        adjacencies: &[(
-            usize,
-            Option<usize>,
-            Option<usize>,
-            Option<usize>,
-            Option<usize>,
-        )],
+        windows: &[WindowId],
+        adjacencies: &[(WinIdx, OptWinIdx, OptWinIdx, OptWinIdx, OptWinIdx)],
     ) {
         let err = Error::NoSuchAdjacentWindow;
         let expectation_as_frame_result =
-            |opt: Option<usize>| opt.map(|adj| windows[adj].clone()).ok_or(err);
+            |opt: Option<usize>| opt.map(|adj| windows[adj]).ok_or(err);
         for &(win, left, right, up, down) in adjacencies.iter() {
             assert_eq!(
                 expectation_as_frame_result(left),

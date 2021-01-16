@@ -6,16 +6,13 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate term;
-extern crate unicode_width;
-
 use std::cmp;
 #[cfg(not(test))]
 use std::iter;
 use std::ops::{Add, Sub};
 
 #[cfg(not(test))]
-use self::unicode_width::UnicodeWidthChar as CharWidth;
+use unicode_width::UnicodeWidthChar as CharWidth;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Size(pub u16, pub u16);
@@ -110,9 +107,9 @@ impl Iterator for CellIterator {
         self.next_cell = self.next_cell.and_then(|cell| {
             (cell + Cell(0, 1))
                 .within(self.size)
-                .or((cell - Cell(0, self.width - 1) + Cell(1, 0)).within(self.size))
+                .or_else(|| (cell - Cell(0, self.width - 1) + Cell(1, 0)).within(self.size))
         });
-        return ret;
+        ret
     }
 }
 
@@ -147,7 +144,7 @@ impl Screen {
                 terminal.clear();
                 Ok(Screen {
                     size: Size(0, 0),
-                    terminal: terminal,
+                    terminal,
                     buffer: ScreenBuffer::new(),
                 })
             },
@@ -161,10 +158,9 @@ impl Screen {
                 if new_size == self.size {
                     None
                 } else {
-                    Some({
-                        self.buffer.resize(new_size);
-                        self.size = new_size;
-                    })
+                    self.buffer.resize(new_size);
+                    self.size = new_size;
+                    Some(())
                 }
             })
             .is_some()
@@ -180,20 +176,20 @@ impl Screen {
     }
 
     pub fn put(&mut self, position: Cell, character: char, fg: Color, bg: Color) {
-        position.within(self.size).map(|Cell(row, col)| {
+        if let Some(Cell(row, col)) = position.within(self.size) {
             if self.buffer.update(position, character, fg, bg) {
                 self.terminal.set_cursor_position(row, col);
                 self.terminal.set_fg(fg);
                 self.terminal.set_bg(bg);
                 self.terminal.put(character);
             }
-        });
+        }
     }
 
     pub fn set_cursor_position(&mut self, position: Cell) {
-        position
-            .within(self.size)
-            .map(|Cell(row, col)| self.terminal.set_cursor_position(row, col));
+        if let Some(Cell(row, col)) = position.within(self.size) {
+            self.terminal.set_cursor_position(row, col);
+        }
     }
 
     pub fn flush(&mut self) {
@@ -223,13 +219,17 @@ impl ScreenBuffer {
     fn resize(&mut self, Size(rows, cols): Size) {
         let current_size = self.cells.len();
         let new_size = rows as usize * cols as usize;
-        if new_size > current_size {
-            self.cells.reserve_exact(new_size);
-            self.cells
-                .extend(iter::repeat(None).take(new_size - current_size))
-        } else if current_size > new_size {
-            self.cells.truncate(new_size);
-            self.cells.shrink_to_fit();
+        match new_size.cmp(&current_size) {
+            std::cmp::Ordering::Greater => {
+                self.cells.reserve_exact(new_size);
+                self.cells
+                    .extend(iter::repeat(None).take(new_size - current_size))
+            }
+            std::cmp::Ordering::Less => {
+                self.cells.truncate(new_size);
+                self.cells.shrink_to_fit();
+            }
+            std::cmp::Ordering::Equal => (),
         }
         self.width = cols;
     }
@@ -274,7 +274,7 @@ struct Terminal {
 #[cfg(not(test))]
 impl Terminal {
     pub fn new() -> Option<Terminal> {
-        term::stdout().map(|terminal| Terminal { terminal: terminal })
+        term::stdout().map(|terminal| Terminal { terminal })
     }
 
     pub fn set_fg(&mut self, fg: Color) {
@@ -374,8 +374,6 @@ impl Color {
  */
 #[cfg(not(test))]
 mod term_size {
-    extern crate libc;
-
     const STDOUT_FILENO: libc::c_int = 1;
 
     #[cfg(target_os = "macos")]

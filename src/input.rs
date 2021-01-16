@@ -6,19 +6,15 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-extern crate futures;
-extern crate libc;
-extern crate termkey;
-
 use std::thread;
 
-use self::futures::sync::mpsc;
-use self::futures::sync::oneshot;
-use self::futures::{Future, Stream};
-use self::termkey::c::TermKeySym;
-use self::termkey::{TermKeyEvent, TermKeyResult};
+use futures::sync::mpsc;
+use futures::sync::oneshot;
+use futures::{Future, Stream};
+use termkey::c::TermKeySym;
+use termkey::{TermKeyEvent, TermKeyResult};
 
-use keymap::{Key, KeyMod, KeySym};
+use crate::keymap::{Key, KeyMod, KeySym};
 
 #[cfg(not(test))]
 const STDIN_FILENO: libc::c_int = 0;
@@ -70,9 +66,7 @@ pub fn start_on_fd(fd: libc::c_int, key_tx: mpsc::UnboundedSender<Key>) -> TermI
  * listened to.
  */
 mod libc_poll {
-    extern crate libc;
-
-    use self::libc::{c_int, c_long, c_short};
+    use libc::{c_int, c_long, c_short};
 
     #[repr(C)]
     struct Pollfd {
@@ -94,18 +88,15 @@ mod libc_poll {
     pub fn poll_fd(fd: c_int, timeout_ms: u16) -> PollResult {
         const POLLIN: c_short = 1;
         let mut pollfd = Pollfd {
-            fd: fd,
+            fd,
             events: POLLIN,
             revents: 0,
         };
         let num_fds = 1;
-        let poll_result = unsafe { poll(&mut pollfd, num_fds, timeout_ms as c_int) };
-        if poll_result < 0 {
-            panic!("Unable to poll stdin.");
-        } else if poll_result > 0 {
-            PollResult::Ready
-        } else {
-            PollResult::Timeout
+        match (unsafe { poll(&mut pollfd, num_fds, timeout_ms as c_int) }).cmp(&0) {
+            std::cmp::Ordering::Less => panic!("Unable to poll stdin."),
+            std::cmp::Ordering::Greater => PollResult::Ready,
+            std::cmp::Ordering::Equal => PollResult::Timeout,
         }
     }
 }
@@ -145,7 +136,7 @@ fn input_loop(
 
         // empty the fd, translating and sending key events
         loop {
-            match tk.getkey() {
+            if let Some(key) = match tk.getkey() {
                 TermKeyResult::None_ => break, // got nothing, done here
                 TermKeyResult::Eof => panic!("stdin closed, you're on your own."),
                 TermKeyResult::Error { err } => {
@@ -166,8 +157,9 @@ fn input_loop(
                         _ => unreachable!(),
                     }
                 }
+            } {
+                key_tx.unbounded_send(key).expect("Key channel died.");
             }
-            .map(|key| key_tx.unbounded_send(key).expect("Key channel died."));
         }
 
         Ok(())
@@ -181,7 +173,7 @@ fn input_loop(
 fn translate_key(key: TermKeyEvent) -> Option<Key> {
     match key {
         TermKeyEvent::FunctionEvent { num, mods } => Some(Key::Fn {
-            num: num,
+            num,
             mods: translate_mods(mods),
         }),
         TermKeyEvent::KeySymEvent { sym, mods } => Some(Key::Sym {
@@ -191,7 +183,7 @@ fn translate_key(key: TermKeyEvent) -> Option<Key> {
         TermKeyEvent::UnicodeEvent {
             codepoint, mods, ..
         } => Some(Key::Unicode {
-            codepoint: codepoint,
+            codepoint,
             mods: translate_mods(mods),
         }),
         _ => None,
@@ -276,23 +268,19 @@ fn translate_mods(mods: termkey::c::X_TermKey_KeyMod) -> KeyMod {
     if mods.contains(termkey::c::TERMKEY_KEYMOD_CTRL) {
         ret.insert(KeyMod::MOD_CTRL);
     }
-    return ret;
+    ret
 }
 
 #[cfg(test)]
 mod test {
-    extern crate futures;
-    extern crate libc;
-    extern crate tokio_timer;
-
     use std::mem;
     use std::thread;
     use std::time::Duration;
 
-    use self::futures::sync::{mpsc, oneshot};
-    use self::futures::{Future, Stream};
+    use futures::sync::{mpsc, oneshot};
+    use futures::{Future, Stream};
 
-    use keymap::{Key, KeySym};
+    use crate::keymap::{Key, KeySym};
 
     use super::*;
 
@@ -395,7 +383,7 @@ mod test {
         }
         let _pipe_killer = PipeKiller {
             close_writer_tx: Some(close_writer_tx),
-            reader_fd: reader_fd,
+            reader_fd,
         };
 
         // start input listener
@@ -437,6 +425,9 @@ mod test {
             .select(timeout)
             .wait()
             .ok()
-            .expect("Timeout waiting for key event.");
+            .expect("Timeout waiting for key event.")
+            .1
+            .wait()
+            .ok();
     }
 }
