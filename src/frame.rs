@@ -1328,9 +1328,10 @@ mod test {
     // Tear down frames in random window order, checking invariants along the way.
     #[test]
     fn split_and_close() {
+        use rand::seq::IteratorRandom;
         let mut rng = rand::thread_rng();
-        let select_window = |rng: &mut rand::ThreadRng, windows: &mut Vec<usize>| {
-            let selected = *rand::seq::sample_iter(rng, windows.iter(), 1).unwrap()[0];
+        let select_window = |rng: &mut rand::rngs::ThreadRng, windows: &mut Vec<usize>| {
+            let selected = *windows.iter().choose_multiple(rng, 1)[0];
             windows.retain(|&x| x != selected);
             selected
         };

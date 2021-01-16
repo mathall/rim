@@ -8,11 +8,9 @@
 
 use std::thread;
 
-use futures::sync::mpsc;
-use futures::sync::oneshot;
-use futures::{Future, Stream};
-use termkey::c::TermKeySym;
-use termkey::{TermKeyEvent, TermKeyResult};
+use futures::channel::mpsc;
+use futures::channel::oneshot;
+use futures::{FutureExt, StreamExt};
 
 use crate::keymap::{Key, KeyMod, KeySym};
 
@@ -36,10 +34,10 @@ impl Drop for TermInput {
             .expect("TermInput already killed.")
             .send(())
             .expect("Input thread died prematurely.");
-        self.died_rx
-            .take()
-            .expect("TermInput already killed.")
-            .wait()
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("Runtime started.")
+            .block_on(self.died_rx.take().expect("TermInput already killed."))
             .expect("Input thread died prematurely.");
     }
 }
@@ -116,17 +114,14 @@ fn input_loop(
     key_tx: mpsc::UnboundedSender<Key>,
     fd: libc::c_int,
 ) {
-    let mut tk = termkey::TermKey::new(fd, termkey::c::TERMKEY_FLAG_CTRLC);
+    let mut tk = termkey::TermKey::new(fd, termkey::c::Flag::CTRLC);
 
-    let inf = futures::stream::repeat::<_, ()>(Event::Continue);
-    let killer = kill_rx.into_stream().map(|_| Event::Break).map_err(|_| ());
+    let inf = futures::stream::repeat::<Event>(Event::Continue);
+    let killer = kill_rx.into_stream().map(|_| Event::Break);
 
-    let input_loop = inf.select(killer).for_each(|event| {
-        match event {
-            Event::Continue => (),
-            Event::Break => return Err(()),
-        }
+    let mut event_stream = futures::stream::select(inf, killer);
 
+    let mut input_loop = || {
         // check for available input
         let poll_timeout_ms = 10;
         if libc_poll::poll_fd(fd, poll_timeout_ms) == libc_poll::PollResult::Ready {
@@ -137,21 +132,21 @@ fn input_loop(
         // empty the fd, translating and sending key events
         loop {
             if let Some(key) = match tk.getkey() {
-                TermKeyResult::None_ => break, // got nothing, done here
-                TermKeyResult::Eof => panic!("stdin closed, you're on your own."),
-                TermKeyResult::Error { err } => {
+                termkey::Result::None_ => break, // got nothing, done here
+                termkey::Result::Eof => panic!("stdin closed, you're on your own."),
+                termkey::Result::Error { err } => {
                     panic!("termkey::geykey failed with error code {}", err)
                 }
-                TermKeyResult::Key(key) => translate_key(key),
-                TermKeyResult::Again =>
+                termkey::Result::Key(key) => translate_key(key),
+                termkey::Result::Again =>
                 // There's input available, but not enough to make a key event. Likely
                 // escape has been pushed, which we want to force out and interpret as
                 // a key on its own, otherwise oops.
                 {
                     match tk.getkey_force() {
-                        TermKeyResult::Key(key) => translate_key(key),
-                        TermKeyResult::Eof => panic!("stdin closed, you're on your own."),
-                        TermKeyResult::Error { err } => {
+                        termkey::Result::Key(key) => translate_key(key),
+                        termkey::Result::Eof => panic!("stdin closed, you're on your own."),
+                        termkey::Result::Error { err } => {
                             panic!("termkey::geykey_force failed with error code {}", err)
                         }
                         _ => unreachable!(),
@@ -161,26 +156,34 @@ fn input_loop(
                 key_tx.unbounded_send(key).expect("Key channel died.");
             }
         }
+    };
 
-        Ok(())
-    });
-
-    input_loop.wait().ok();
+    tokio::runtime::Builder::new_current_thread()
+        .build()
+        .expect("Runtime started.")
+        .block_on(async {
+            while let Some(event) = event_stream.next().await {
+                match event {
+                    Event::Continue => input_loop(),
+                    Event::Break => break,
+                }
+            }
+        });
 
     died_tx.send(()).expect("Main thread died prematurely.");
 }
 
-fn translate_key(key: TermKeyEvent) -> Option<Key> {
+fn translate_key(key: termkey::Event) -> Option<Key> {
     match key {
-        TermKeyEvent::FunctionEvent { num, mods } => Some(Key::Fn {
+        termkey::Event::Function { num, mods } => Some(Key::Fn {
             num,
             mods: translate_mods(mods),
         }),
-        TermKeyEvent::KeySymEvent { sym, mods } => Some(Key::Sym {
+        termkey::Event::KeySym { sym, mods } => Some(Key::Sym {
             sym: translate_sym(sym),
             mods: translate_mods(mods),
         }),
-        TermKeyEvent::UnicodeEvent {
+        termkey::Event::Unicode {
             codepoint, mods, ..
         } => Some(Key::Unicode {
             codepoint,
@@ -190,82 +193,82 @@ fn translate_key(key: TermKeyEvent) -> Option<Key> {
     }
 }
 
-fn translate_sym(sym: TermKeySym) -> KeySym {
+fn translate_sym(sym: termkey::c::Sym) -> KeySym {
     match sym {
-        TermKeySym::TERMKEY_SYM_UNKNOWN => KeySym::Unknown,
-        TermKeySym::TERMKEY_SYM_NONE => KeySym::None,
-        TermKeySym::TERMKEY_SYM_BACKSPACE => KeySym::Backspace,
-        TermKeySym::TERMKEY_SYM_TAB => KeySym::Tab,
-        TermKeySym::TERMKEY_SYM_ENTER => KeySym::Enter,
-        TermKeySym::TERMKEY_SYM_ESCAPE => KeySym::Escape,
-        TermKeySym::TERMKEY_SYM_SPACE => KeySym::Space,
-        TermKeySym::TERMKEY_SYM_DEL => KeySym::Del,
-        TermKeySym::TERMKEY_SYM_UP => KeySym::Up,
-        TermKeySym::TERMKEY_SYM_DOWN => KeySym::Down,
-        TermKeySym::TERMKEY_SYM_LEFT => KeySym::Left,
-        TermKeySym::TERMKEY_SYM_RIGHT => KeySym::Right,
-        TermKeySym::TERMKEY_SYM_BEGIN => KeySym::Begin,
-        TermKeySym::TERMKEY_SYM_FIND => KeySym::Find,
-        TermKeySym::TERMKEY_SYM_INSERT => KeySym::Insert,
-        TermKeySym::TERMKEY_SYM_DELETE => KeySym::Delete,
-        TermKeySym::TERMKEY_SYM_SELECT => KeySym::Select,
-        TermKeySym::TERMKEY_SYM_PAGEUP => KeySym::Pageup,
-        TermKeySym::TERMKEY_SYM_PAGEDOWN => KeySym::Pagedown,
-        TermKeySym::TERMKEY_SYM_HOME => KeySym::Home,
-        TermKeySym::TERMKEY_SYM_END => KeySym::End,
-        TermKeySym::TERMKEY_SYM_CANCEL => KeySym::Cancel,
-        TermKeySym::TERMKEY_SYM_CLEAR => KeySym::Clear,
-        TermKeySym::TERMKEY_SYM_CLOSE => KeySym::Close,
-        TermKeySym::TERMKEY_SYM_COMMAND => KeySym::Command,
-        TermKeySym::TERMKEY_SYM_COPY => KeySym::Copy,
-        TermKeySym::TERMKEY_SYM_EXIT => KeySym::Exit,
-        TermKeySym::TERMKEY_SYM_HELP => KeySym::Help,
-        TermKeySym::TERMKEY_SYM_MARK => KeySym::Mark,
-        TermKeySym::TERMKEY_SYM_MESSAGE => KeySym::Message,
-        TermKeySym::TERMKEY_SYM_MOVE => KeySym::Move,
-        TermKeySym::TERMKEY_SYM_OPEN => KeySym::Open,
-        TermKeySym::TERMKEY_SYM_OPTIONS => KeySym::Options,
-        TermKeySym::TERMKEY_SYM_PRINT => KeySym::Print,
-        TermKeySym::TERMKEY_SYM_REDO => KeySym::Redo,
-        TermKeySym::TERMKEY_SYM_REFERENCE => KeySym::Reference,
-        TermKeySym::TERMKEY_SYM_REFRESH => KeySym::Refresh,
-        TermKeySym::TERMKEY_SYM_REPLACE => KeySym::Replace,
-        TermKeySym::TERMKEY_SYM_RESTART => KeySym::Restart,
-        TermKeySym::TERMKEY_SYM_RESUME => KeySym::Resume,
-        TermKeySym::TERMKEY_SYM_SAVE => KeySym::Save,
-        TermKeySym::TERMKEY_SYM_SUSPEND => KeySym::Suspend,
-        TermKeySym::TERMKEY_SYM_UNDO => KeySym::Undo,
-        TermKeySym::TERMKEY_SYM_KP0 => KeySym::KP0,
-        TermKeySym::TERMKEY_SYM_KP1 => KeySym::KP1,
-        TermKeySym::TERMKEY_SYM_KP2 => KeySym::KP2,
-        TermKeySym::TERMKEY_SYM_KP3 => KeySym::KP3,
-        TermKeySym::TERMKEY_SYM_KP4 => KeySym::KP4,
-        TermKeySym::TERMKEY_SYM_KP5 => KeySym::KP5,
-        TermKeySym::TERMKEY_SYM_KP6 => KeySym::KP6,
-        TermKeySym::TERMKEY_SYM_KP7 => KeySym::KP7,
-        TermKeySym::TERMKEY_SYM_KP8 => KeySym::KP8,
-        TermKeySym::TERMKEY_SYM_KP9 => KeySym::KP9,
-        TermKeySym::TERMKEY_SYM_KPENTER => KeySym::KPEnter,
-        TermKeySym::TERMKEY_SYM_KPPLUS => KeySym::KPPlus,
-        TermKeySym::TERMKEY_SYM_KPMINUS => KeySym::KPMinus,
-        TermKeySym::TERMKEY_SYM_KPMULT => KeySym::KPMult,
-        TermKeySym::TERMKEY_SYM_KPDIV => KeySym::KPDiv,
-        TermKeySym::TERMKEY_SYM_KPCOMMA => KeySym::KPComma,
-        TermKeySym::TERMKEY_SYM_KPPERIOD => KeySym::KPPeriod,
-        TermKeySym::TERMKEY_SYM_KPEQUALS => KeySym::KPEquals,
-        TermKeySym::TERMKEY_N_SYMS => KeySym::NSyms,
+        termkey::c::Sym::UNKNOWN => KeySym::Unknown,
+        termkey::c::Sym::NONE => KeySym::None,
+        termkey::c::Sym::BACKSPACE => KeySym::Backspace,
+        termkey::c::Sym::TAB => KeySym::Tab,
+        termkey::c::Sym::ENTER => KeySym::Enter,
+        termkey::c::Sym::ESCAPE => KeySym::Escape,
+        termkey::c::Sym::SPACE => KeySym::Space,
+        termkey::c::Sym::DEL => KeySym::Del,
+        termkey::c::Sym::UP => KeySym::Up,
+        termkey::c::Sym::DOWN => KeySym::Down,
+        termkey::c::Sym::LEFT => KeySym::Left,
+        termkey::c::Sym::RIGHT => KeySym::Right,
+        termkey::c::Sym::BEGIN => KeySym::Begin,
+        termkey::c::Sym::FIND => KeySym::Find,
+        termkey::c::Sym::INSERT => KeySym::Insert,
+        termkey::c::Sym::DELETE => KeySym::Delete,
+        termkey::c::Sym::SELECT => KeySym::Select,
+        termkey::c::Sym::PAGEUP => KeySym::Pageup,
+        termkey::c::Sym::PAGEDOWN => KeySym::Pagedown,
+        termkey::c::Sym::HOME => KeySym::Home,
+        termkey::c::Sym::END => KeySym::End,
+        termkey::c::Sym::CANCEL => KeySym::Cancel,
+        termkey::c::Sym::CLEAR => KeySym::Clear,
+        termkey::c::Sym::CLOSE => KeySym::Close,
+        termkey::c::Sym::COMMAND => KeySym::Command,
+        termkey::c::Sym::COPY => KeySym::Copy,
+        termkey::c::Sym::EXIT => KeySym::Exit,
+        termkey::c::Sym::HELP => KeySym::Help,
+        termkey::c::Sym::MARK => KeySym::Mark,
+        termkey::c::Sym::MESSAGE => KeySym::Message,
+        termkey::c::Sym::MOVE => KeySym::Move,
+        termkey::c::Sym::OPEN => KeySym::Open,
+        termkey::c::Sym::OPTIONS => KeySym::Options,
+        termkey::c::Sym::PRINT => KeySym::Print,
+        termkey::c::Sym::REDO => KeySym::Redo,
+        termkey::c::Sym::REFERENCE => KeySym::Reference,
+        termkey::c::Sym::REFRESH => KeySym::Refresh,
+        termkey::c::Sym::REPLACE => KeySym::Replace,
+        termkey::c::Sym::RESTART => KeySym::Restart,
+        termkey::c::Sym::RESUME => KeySym::Resume,
+        termkey::c::Sym::SAVE => KeySym::Save,
+        termkey::c::Sym::SUSPEND => KeySym::Suspend,
+        termkey::c::Sym::UNDO => KeySym::Undo,
+        termkey::c::Sym::KP0 => KeySym::KP0,
+        termkey::c::Sym::KP1 => KeySym::KP1,
+        termkey::c::Sym::KP2 => KeySym::KP2,
+        termkey::c::Sym::KP3 => KeySym::KP3,
+        termkey::c::Sym::KP4 => KeySym::KP4,
+        termkey::c::Sym::KP5 => KeySym::KP5,
+        termkey::c::Sym::KP6 => KeySym::KP6,
+        termkey::c::Sym::KP7 => KeySym::KP7,
+        termkey::c::Sym::KP8 => KeySym::KP8,
+        termkey::c::Sym::KP9 => KeySym::KP9,
+        termkey::c::Sym::KPENTER => KeySym::KPEnter,
+        termkey::c::Sym::KPPLUS => KeySym::KPPlus,
+        termkey::c::Sym::KPMINUS => KeySym::KPMinus,
+        termkey::c::Sym::KPMULT => KeySym::KPMult,
+        termkey::c::Sym::KPDIV => KeySym::KPDiv,
+        termkey::c::Sym::KPCOMMA => KeySym::KPComma,
+        termkey::c::Sym::KPPERIOD => KeySym::KPPeriod,
+        termkey::c::Sym::KPEQUALS => KeySym::KPEquals,
+        termkey::c::Sym::N_SYMS => KeySym::NSyms,
     }
 }
 
-fn translate_mods(mods: termkey::c::X_TermKey_KeyMod) -> KeyMod {
+fn translate_mods(mods: termkey::c::KeyMod) -> KeyMod {
     let mut ret = KeyMod::MOD_NONE;
-    if mods.contains(termkey::c::TERMKEY_KEYMOD_SHIFT) {
+    if mods.contains(termkey::c::KeyMod::SHIFT) {
         ret.insert(KeyMod::MOD_SHIFT);
     }
-    if mods.contains(termkey::c::TERMKEY_KEYMOD_ALT) {
+    if mods.contains(termkey::c::KeyMod::ALT) {
         ret.insert(KeyMod::MOD_ALT);
     }
-    if mods.contains(termkey::c::TERMKEY_KEYMOD_CTRL) {
+    if mods.contains(termkey::c::KeyMod::CTRL) {
         ret.insert(KeyMod::MOD_CTRL);
     }
     ret
@@ -277,8 +280,8 @@ mod test {
     use std::thread;
     use std::time::Duration;
 
-    use futures::sync::{mpsc, oneshot};
-    use futures::{Future, Stream};
+    use futures::channel::{mpsc, oneshot};
+    use futures::StreamExt;
 
     use crate::keymap::{Key, KeySym};
 
@@ -402,32 +405,28 @@ mod test {
                 thread::sleep(Duration::from_millis(1));
             }
             // keep the pipe alive until we're finished with it
-            close_writer_rx.wait().unwrap();
+            tokio::runtime::Builder::new_current_thread()
+                .build()
+                .expect("Runtime started.")
+                .block_on(close_writer_rx)
+                .unwrap();
             unsafe {
                 libc::close(writer_fd);
             }
         });
 
-        let timeout = tokio_timer::wheel()
-            .tick_duration(Duration::from_millis(10))
-            .build()
-            .sleep(Duration::from_millis(100))
-            .then(|_| Err(()));
-
         // match up received keys with the expected output
-        let expected_output = futures::stream::iter_result(outputs.iter().map(Ok));
+        let expected_output = futures::stream::iter(outputs.iter());
         let check = key_rx.zip(expected_output).for_each(|(key, output)| {
             assert_eq!(key, *output);
-            Ok(())
+            futures::future::ready(())
         });
 
-        check
-            .select(timeout)
-            .wait()
-            .ok()
-            .expect("Timeout waiting for key event.")
-            .1
-            .wait()
-            .ok();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("Runtime started.")
+            .block_on(async { tokio::time::timeout(Duration::from_millis(10), check).await })
+            .expect("Timeout waiting for key event.");
     }
 }

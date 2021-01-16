@@ -6,10 +6,6 @@
  * file, You can obtain one at http://mozilla.org/MPL/2.0/.
  */
 
-#[cfg(not(test))]
-#[macro_use]
-extern crate serde_derive;
-
 mod buffer;
 mod caret;
 mod command;
@@ -27,7 +23,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 #[cfg(not(test))]
-use futures::{Future, Stream};
+use futures::StreamExt;
 
 #[cfg(not(test))]
 use buffer::Buffer;
@@ -709,7 +705,7 @@ Options:
 ";
 
 #[cfg(not(test))]
-#[derive(Deserialize)]
+#[derive(serde::Deserialize)]
 struct Args {
     arg_file: Option<String>,
     flag_version: bool,
@@ -736,10 +732,10 @@ fn main() {
     }
     let mut screen = Screen::setup().unwrap();
 
-    let (key_tx, key_rx) = futures::sync::mpsc::unbounded();
+    let (key_tx, key_rx) = futures::channel::mpsc::unbounded();
     let _term_input = input::start(key_tx);
 
-    let (cmd_tx, cmd_rx) = futures::sync::mpsc::unbounded();
+    let (cmd_tx, cmd_rx) = futures::channel::mpsc::unbounded();
     cmd_tx.unbounded_send(Cmd::ResetLayout).unwrap();
     let filename = args.arg_file.unwrap_or_else(|| "src/main.rs".to_string());
     cmd_tx
@@ -750,25 +746,19 @@ fn main() {
     let mut rim = Rim::new(cmd_thread);
 
     // attempt to redraw at a regular interval
-    let draw_pulse = tokio_timer::wheel()
-        .tick_duration(Duration::from_millis(10))
-        .build()
-        .interval(Duration::from_millis(33))
-        .map(|_| Event::Draw)
-        .map_err(|_| ());
+    let (draw_tx, draw_rx) = futures::channel::mpsc::unbounded();
+    let draw_pulse = async move {
+        let mut instant = tokio::time::interval(Duration::from_millis(33));
+        while draw_tx.unbounded_send(Event::Draw).is_ok() {
+            instant.tick().await;
+        }
+    };
 
     let cmd_stream = cmd_rx.map(Event::HandleCmd);
 
-    let rim_loop = cmd_stream.select(draw_pulse).for_each(|event| {
-        match event {
-            Event::HandleCmd(cmd) => rim.handle_cmd(cmd),
-            Event::Draw => (),
-        }
+    let mut event_stream = futures::stream::select(cmd_stream, draw_rx);
 
-        if rim.quit {
-            return Err(());
-        }
-
+    let mut draw = |rim: &mut Rim| {
         // clear/redraw/update/invalidate everything if the screen size changed
         if screen.update_size() {
             rim.frame.set_size(screen.size());
@@ -815,11 +805,25 @@ fn main() {
                 .expect("Couldn't find focused window.");
             screen.flush();
         }
+    };
 
-        Ok(())
-    });
-
-    rim_loop.wait().ok();
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("Runtime started.")
+        .block_on(async {
+            tokio::spawn(draw_pulse);
+            while let Some(event) = event_stream.next().await {
+                match event {
+                    Event::HandleCmd(cmd) => rim.handle_cmd(cmd),
+                    Event::Draw => (),
+                }
+                draw(&mut rim);
+                if rim.quit {
+                    break;
+                }
+            }
+        });
 }
 
 #[cfg(not(test))]

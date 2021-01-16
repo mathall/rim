@@ -12,8 +12,8 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use futures::sync::{mpsc, oneshot};
-use futures::{Future, Stream};
+use futures::channel::{mpsc, oneshot};
+use futures::{FutureExt, StreamExt};
 use vec_map::VecMap;
 
 use crate::caret;
@@ -69,10 +69,10 @@ impl Drop for CmdThread {
             .expect("CmdThread already killed.")
             .send(())
             .expect("Command thread died prematurely.");
-        self.died_rx
-            .take()
-            .expect("CmdThread already killed.")
-            .wait()
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .expect("Runtime started.")
+            .block_on(self.died_rx.take().expect("CmdThread already killed."))
             .expect("Command thread died prematurely.");
     }
 }
@@ -132,108 +132,110 @@ fn cmd_thread(
     // implies higher priority
     let mut modes = VecMap::new();
 
-    // setup the command loop
-    let mut core = tokio_core::reactor::Core::new().unwrap();
-
     // setup a channel through which timeouts may be requested
-    let timeout_core_handle = core.handle();
     let (timeout_tx, timeout_rx) = mpsc::unbounded();
     let request_timeout = |seq| {
         let tx = timeout_tx.clone();
-        let timeout = tokio_timer::wheel()
-            .tick_duration(Duration::from_millis(10))
-            .build()
-            .sleep(Duration::from_millis(TIMEOUT))
-            .then(move |_| {
-                tx.unbounded_send(seq).expect("Oneshot channel died.");
-                Ok(())
-            });
-        timeout_core_handle.spawn(timeout);
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(TIMEOUT)).await;
+            tx.unbounded_send(seq).expect("Oneshot channel died.");
+        });
     };
 
-    let killer = kill_rx.into_stream().map(|_| Event::Kill).map_err(|_| ());
+    let mut process_event = |event| {
+        let mut drain = false;
+
+        match event {
+            Event::Key(key) => {
+                keys.push_back(key);
+                back_seq += 1;
+            }
+            Event::CmdMsg(msg) => match msg {
+                Msg::SetMode(mode, num) => {
+                    modes.insert(num, mode);
+                }
+                Msg::AckCmd => {
+                    cmd_acknowledged = true;
+                }
+            },
+            Event::Timeout(seq) => drain = seq == back_seq,
+            Event::Kill => unreachable!(),
+        }
+
+        // work through the arrived keys
+        while !keys.is_empty() {
+            assert!(back_seq >= front_seq);
+            // determine amount of keys to consider
+            let num_keys = back_seq - front_seq;
+            // match keys with modes in priority order
+            let mut match_result = MatchResult::None;
+            for (_, mode) in modes.iter().rev() {
+                // first match by keychain
+                match_result = mode
+                    .keychain
+                    .match_keys(&mut keys.iter().take(num_keys), drain);
+                // use the mode's fallback if the keychain didn't match anything
+                if match_result == MatchResult::None {
+                    if let Some(cmd) = (mode.fallback)(keys[0]) {
+                        match_result = MatchResult::Complete(cmd, 1);
+                    }
+                }
+                // proceed to next mode only if no match was made
+                if match_result != MatchResult::None {
+                    break;
+                }
+            }
+
+            // act on the match result
+            match match_result {
+                MatchResult::None => {
+                    keys.pop_front();
+                    front_seq += 1;
+                }
+                MatchResult::Partial(num) => {
+                    assert_eq!(front_seq + num, back_seq);
+                    request_timeout(back_seq);
+                    break;
+                }
+                MatchResult::Complete(cmd, num) => {
+                    if !cmd_acknowledged {
+                        break;
+                    } else {
+                        for _ in 0..num {
+                            keys.pop_front();
+                            front_seq += 1;
+                        }
+                        cmd_tx.unbounded_send(cmd).expect("Command channel died.");
+                        cmd_acknowledged = false;
+                    }
+                }
+            }
+        }
+    };
+
+    // setup the command loop
+    let killer = kill_rx.into_stream().map(|_| Event::Kill);
     let timeout = timeout_rx.map(Event::Timeout);
     let msg_stream = msg_rx.map(Event::CmdMsg);
     let key_stream = key_rx.map(Event::Key);
 
-    let cmd_loop = key_stream
-        .select(msg_stream)
-        .select(timeout)
-        .select(killer)
-        .for_each(|event| {
-            let mut drain = false;
+    let mut event_stream = futures::stream::select(
+        futures::stream::select(futures::stream::select(key_stream, msg_stream), timeout),
+        killer,
+    );
 
-            match event {
-                Event::Key(key) => {
-                    keys.push_back(key);
-                    back_seq += 1;
+    tokio::runtime::Builder::new_current_thread()
+        .enable_time()
+        .build()
+        .expect("Runtime started.")
+        .block_on(async {
+            while let Some(event) = event_stream.next().await {
+                if let Event::Kill = event {
+                    break;
                 }
-                Event::CmdMsg(msg) => match msg {
-                    Msg::SetMode(mode, num) => {
-                        modes.insert(num, mode);
-                    }
-                    Msg::AckCmd => {
-                        cmd_acknowledged = true;
-                    }
-                },
-                Event::Timeout(seq) => drain = seq == back_seq,
-                Event::Kill => return Err(()),
+                process_event(event);
             }
-
-            // work through the arrived keys
-            while !keys.is_empty() {
-                assert!(back_seq >= front_seq);
-                // determine amount of keys to consider
-                let num_keys = back_seq - front_seq;
-                // match keys with modes in priority order
-                let mut match_result = MatchResult::None;
-                for (_, mode) in modes.iter().rev() {
-                    // first match by keychain
-                    match_result = mode
-                        .keychain
-                        .match_keys(&mut keys.iter().take(num_keys), drain);
-                    // use the mode's fallback if the keychain didn't match anything
-                    if match_result == MatchResult::None {
-                        if let Some(cmd) = (mode.fallback)(keys[0]) {
-                            match_result = MatchResult::Complete(cmd, 1);
-                        }
-                    }
-                    // proceed to next mode only if no match was made
-                    if match_result != MatchResult::None {
-                        break;
-                    }
-                }
-
-                // act on the match result
-                match match_result {
-                    MatchResult::None => {
-                        keys.pop_front();
-                        front_seq += 1;
-                    }
-                    MatchResult::Partial(num) => {
-                        assert_eq!(front_seq + num, back_seq);
-                        request_timeout(back_seq);
-                        break;
-                    }
-                    MatchResult::Complete(cmd, num) => {
-                        if !cmd_acknowledged {
-                            break;
-                        } else {
-                            for _ in 0..num {
-                                keys.pop_front();
-                                front_seq += 1;
-                            }
-                            cmd_tx.unbounded_send(cmd).expect("Command channel died.");
-                            cmd_acknowledged = false;
-                        }
-                    }
-                }
-            }
-
-            Ok(())
         });
-
-    core.run(cmd_loop).ok();
 
     died_tx.send(()).expect("Main thread died prematurely.");
 }
@@ -419,8 +421,8 @@ mod test {
     use std::thread;
     use std::time::Duration;
 
-    use futures::sync::mpsc;
-    use futures::{Future, Stream};
+    use futures::channel::mpsc;
+    use futures::StreamExt;
 
     use crate::keymap::{Key, KeyMod};
 
@@ -456,29 +458,21 @@ mod test {
             }
         });
 
-        let timeout = tokio_timer::wheel()
-            .tick_duration(Duration::from_millis(10))
-            .build()
-            .sleep(Duration::from_millis(1000))
-            .then(|_| Err(()));
-
         // match up received commands with the expected output
-        let expected_output = futures::stream::iter_result(outputs.iter().map(Ok));
+        let expected_output = futures::stream::iter(outputs.iter());
         let check = cmd_rx.zip(expected_output).for_each(|(cmd, output)| {
             assert_eq!(cmd, *output);
             callback(cmd, &cmd_thread);
             cmd_thread.ack_cmd();
-            Ok(())
+            futures::future::ready(())
         });
 
-        check
-            .select(timeout)
-            .wait()
-            .ok()
-            .expect("Timeout waiting for command.")
-            .1
-            .wait()
-            .ok();
+        tokio::runtime::Builder::new_current_thread()
+            .enable_time()
+            .build()
+            .expect("Runtime started.")
+            .block_on(async { tokio::time::timeout(Duration::from_millis(1000), check).await })
+            .expect("Timeout waiting for command.");
     }
 
     fn mode_0() -> Mode {
