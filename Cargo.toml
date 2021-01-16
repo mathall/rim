@@ -2,6 +2,7 @@
 name = "rim"
 version = "0.1.0"
 authors = [ "Mathias Hällman <rim@mths.se>" ]
+edition = "2018"
 
 [dependencies]
 bitflags = "*"
@@ -9,12 +10,11 @@ docopt = "*"
 futures = "*"
 libc = "*"
 rand = "*"
-serde = "1"
-serde_derive = "1"
+serde = "*"
+serde_derive = "*"
 term = "*"
 termkey-rs = { git = "git://github.com/mathall/termkey-rs.git" }
-tokio-core = "*"
-tokio-timer = "*"
+tokio = { version = "*", features = ["rt", "time"] }
 unicode-width = "*"
 uuid = { version = "*", features = ["v4"] }
 vec_map = "*"
